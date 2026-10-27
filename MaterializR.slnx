@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Demo/Demo.csproj" Id="bdad944d-b79c-43f5-adc6-c69593a8cd6a" />
+  <Project Path="MaterializR.Core/MaterializR.Core.csproj" />
+</Solution>
