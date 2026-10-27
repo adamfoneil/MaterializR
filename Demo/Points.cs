@@ -31,10 +31,8 @@ internal class Points : IViewEntity<Points.Dimensions>
 }
 
 internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> dbFactory) : ViewConfigurationBase<ApplicationDbContext, Points, Points.Dimensions>(dbFactory)
-{
-    protected override DbSet<Points> ViewEntity => throw new NotImplementedException();
-
-    protected override Task MergeAsync(ApplicationDbContext dbContext, Points[] data, IDbContextTransaction txn)
+{   
+    protected override Task MergeAsync(ApplicationDbContext dbContext, Points[] data)
     {
         throw new NotImplementedException();
     }
@@ -44,7 +42,7 @@ internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> d
         throw new NotImplementedException();
     }
 
-    protected override Task<Points[]> QueryLiveAsync(ApplicationDbContext dbContext, Points.Dimensions[] dimensions, IDbContextTransaction txn)
+    protected override Task<Points[]> QueryLiveAsync(ApplicationDbContext dbContext, Points.Dimensions[] dimensions)
     {
         throw new NotImplementedException();
     }
@@ -58,4 +56,6 @@ internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> d
     {
         throw new NotImplementedException();
     }
+
+    protected override DbSet<Points> ViewEntity(ApplicationDbContext db) => db.Points;    
 }

@@ -11,17 +11,17 @@ public abstract class ViewConfigurationBase<TDbContext, TViewEntity, TViewDimens
 {    
     private readonly IDbContextFactory<TDbContext> _dbFactory = dbFactory;
 
-    protected abstract DbSet<TViewEntity> ViewEntity { get; }
+    protected abstract DbSet<TViewEntity> ViewEntity(TDbContext db);
 
     /// <summary>
     /// query that returns the live view data for a set of dimensions
     /// </summary>
-    protected abstract Task<TViewEntity[]> QueryLiveAsync(TDbContext dbContext, TViewDimensions[] dimensions, IDbContextTransaction txn);
+    protected abstract Task<TViewEntity[]> QueryLiveAsync(TDbContext dbContext, TViewDimensions[] dimensions);
 
     /// <summary>
     /// upsert queried live data into the cache/view table
     /// </summary>
-    protected abstract Task MergeAsync(TDbContext dbContext, TViewEntity[] data, IDbContextTransaction txn);
+    protected abstract Task MergeAsync(TDbContext dbContext, TViewEntity[] data);
 
     /// <summary>
     /// flag dimensions as modified, inserting where they don't
@@ -46,10 +46,9 @@ public abstract class ViewConfigurationBase<TDbContext, TViewEntity, TViewDimens
         try
         {
             var dimensions = await ViewEntity.AsNoTracking().Where(row => row.IsModified).Select(row => row.ToDimensions()).ToArrayAsync();            
-            var liveData = await QueryLiveAsync(db, dimensions, txn);
-            await MergeAsync(db, liveData, txn);
-            await ViewEntity.Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));            
-
+            var liveData = await QueryLiveAsync(db, dimensions);
+            await MergeAsync(db, liveData);
+            await ViewEntity.Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));
             await txn.CommitAsync();
         }
         catch 
@@ -60,10 +59,12 @@ public abstract class ViewConfigurationBase<TDbContext, TViewEntity, TViewDimens
     }
 
     /// <summary>
-    /// should be called from TDbContext.SaveChanges override
+    /// should be called from TDbContext.SaveChanges override to set TViewEntity.IsModified = true
     /// </summary>
-    public async Task TrackChangesAsync(TDbContext dbContext, ChangeTracker changeTracker)
+    public async Task TrackModifiedAsync(TDbContext dbContext, ChangeTracker changeTracker)
     {
         var dimensions = await TrackModifiedDimensionsAsync(dbContext, changeTracker);
+
+        await MergeDimensionsAsync(dbContext, dimensions);
     }
 }
