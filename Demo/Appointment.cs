@@ -13,6 +13,8 @@ public class Appointment
 {
     public int Id { get; set; }
     public int LocationId { get; set; }
+    public int ClientId { get; set; }
+    public int? TransportId { get; set; }
     public DateOnly Date { get; set; }
     public TimeOnly Time { get; set; }
     public AppointmentStatus Status { get; set; }

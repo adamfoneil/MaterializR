@@ -14,7 +14,7 @@ internal class Points : IViewEntity<Points.Dimensions>
     /// <summary>
     /// 0 = clinic, any other value is transport
     /// </summary>
-    public int ClientId { get; set; }
+    public int TransportId { get; set; }
 
     // you'll need a type that represents the unique index of the cache/view table
     public record Dimensions(int LocationId, DateOnly Date, int ClientId);
