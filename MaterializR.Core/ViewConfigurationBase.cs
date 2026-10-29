@@ -1,6 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
-using Microsoft.EntityFrameworkCore.Storage;
 
 namespace MaterializR.Core;
 
@@ -9,7 +8,7 @@ public abstract class ViewConfigurationBase<TDbContext, TViewEntity, TViewDimens
     where TDbContext : DbContext
     where TViewEntity : class, IViewEntity<TViewDimensions>
 {    
-    private readonly IDbContextFactory<TDbContext> _dbFactory = dbFactory;
+    protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
 
     protected abstract DbSet<TViewEntity> ViewEntity(TDbContext db);
 
@@ -29,26 +28,21 @@ public abstract class ViewConfigurationBase<TDbContext, TViewEntity, TViewDimens
     protected abstract Task MergeDimensionsAsync(TDbContext dbContext, TViewDimensions[] dimensions);
 
     /// <summary>
-    /// what view dimensions have changed since the last update? (where IsModified = true)
-    /// </summary>
-    protected abstract Task<TViewDimensions[]> QueryModifiedDimensionsAsync(TDbContext dbContext, IDbContextTransaction txn);
-
-    /// <summary>
     /// inspect the change tracker to derive what dimensions have changed, if any
     /// </summary>
     protected abstract Task<TViewDimensions[]> TrackModifiedDimensionsAsync(TDbContext dbContext, ChangeTracker changeTracker);
 
     public async Task UpdateAsync()
     {
-        using var db = _dbFactory.CreateDbContext();
+        using var db = DbFactory.CreateDbContext();
         using var txn = db.Database.BeginTransaction();
 
         try
         {
-            var dimensions = await ViewEntity.AsNoTracking().Where(row => row.IsModified).Select(row => row.ToDimensions()).ToArrayAsync();            
+            var dimensions = await ViewEntity(db).AsNoTracking().Where(row => row.IsModified).Select(row => row.ToDimensions()).ToArrayAsync();            
             var liveData = await QueryLiveAsync(db, dimensions);
             await MergeAsync(db, liveData);
-            await ViewEntity.Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));
+            await ViewEntity(db).Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));
             await txn.CommitAsync();
         }
         catch 
