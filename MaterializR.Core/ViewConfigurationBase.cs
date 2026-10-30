@@ -27,10 +27,20 @@ public abstract class ViewConfigurationBase<TDbContext, TViewEntity, TViewDimens
     /// </summary>
     protected abstract Task MergeDimensionsAsync(TDbContext dbContext, TViewDimensions[] dimensions);
 
-    /// <summary>
-    /// inspect the change tracker to derive what dimensions have changed, if any
-    /// </summary>
-    protected abstract Task<TViewDimensions[]> TrackModifiedDimensionsAsync(TDbContext dbContext, ChangeTracker changeTracker);
+    protected TViewDimensions[] Added<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
+        [.. changeTracker.Entries<TEntity>()
+            .Where(e => e.State == EntityState.Added)
+            .Select(e => selector(e.Entity)).Distinct()];
+
+    protected TViewDimensions[] Modified<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
+        [.. changeTracker.Entries<TEntity>()
+            .Where(e => e.State == EntityState.Modified)
+            .Select(e => selector(e.Entity)).Distinct()];
+
+    protected TViewDimensions[] ModifiedOriginal<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
+        [.. changeTracker.Entries<TEntity>()
+            .Where(e => e.State == EntityState.Modified)
+            .Select(e => selector((TEntity)e.OriginalValues.ToObject())).Distinct()];
 
     public async Task UpdateAsync()
     {
@@ -55,10 +65,13 @@ public abstract class ViewConfigurationBase<TDbContext, TViewEntity, TViewDimens
     /// <summary>
     /// should be called from TDbContext.SaveChanges override to set TViewEntity.IsModified = true
     /// </summary>
-    public async Task TrackModifiedAsync(TDbContext dbContext, ChangeTracker changeTracker)
+    public async Task TrackModifiedAsync<TEntity>(TDbContext dbContext, ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class
     {
-        var dimensions = await TrackModifiedDimensionsAsync(dbContext, changeTracker);
-
-        await MergeDimensionsAsync(dbContext, dimensions);
+        List<TViewDimensions> changes = [];
+        changes.AddRange(Added(changeTracker, selector));
+        changes.AddRange(Modified(changeTracker, selector));
+        changes.AddRange(ModifiedOriginal(changeTracker, selector));
+        
+        await MergeDimensionsAsync(dbContext, [..changes]);
     }
 }

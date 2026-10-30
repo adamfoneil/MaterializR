@@ -154,10 +154,5 @@ internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> d
         })];
     }
 
-    protected override Task<PointsView.Dimensions[]> TrackModifiedDimensionsAsync(ApplicationDbContext dbContext, ChangeTracker changeTracker)
-    {
-        throw new NotImplementedException();
-    }
-
     protected override DbSet<PointsView> ViewEntity(ApplicationDbContext db) => db.PointsView;    
 }
