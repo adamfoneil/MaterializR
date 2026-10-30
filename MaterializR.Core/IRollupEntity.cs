@@ -4,7 +4,7 @@
 /// describes an entity intended to store calculations (facts)
 /// </summary>
 /// <typeparam name="TDimensions">represents the combination of unique properties</typeparam>
-public interface IViewEntity<TDimensions>
+public interface IRollupEntity<TDimensions>
 {
     /// <summary>
     /// indicates that underlying data has changed and this view row needs to be refreshed

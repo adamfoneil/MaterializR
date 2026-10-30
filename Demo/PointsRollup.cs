@@ -1,13 +1,11 @@
 ﻿using MaterializR.Core;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using Microsoft.EntityFrameworkCore.Storage;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Demo;
 
-internal class PointsView : IViewEntity<PointsView.Dimensions>
+internal class PointsRollup : IRollupEntity<PointsRollup.Dimensions>
 {
     // dimensions
 
@@ -36,9 +34,9 @@ internal class PointsView : IViewEntity<PointsView.Dimensions>
     public Dimensions ToDimensions() => new(Date, TransportId);    
 }
 
-public class PointsConfiguration : IEntityTypeConfiguration<PointsView>
+public class PointsConfiguration : IEntityTypeConfiguration<PointsRollup>
 {
-    void IEntityTypeConfiguration<PointsView>.Configure(EntityTypeBuilder<PointsView> builder)
+    void IEntityTypeConfiguration<PointsRollup>.Configure(EntityTypeBuilder<PointsRollup> builder)
     {
         builder.HasIndex(e => new { e.Date, e.TransportId }).IsUnique();        
 
@@ -51,16 +49,16 @@ public class PointsConfiguration : IEntityTypeConfiguration<PointsView>
     }
 }
 
-internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> dbFactory) : ViewConfigurationBase<ApplicationDbContext, PointsView, PointsView.Dimensions>(dbFactory)
+internal class PointsRollupConfiguration(IDbContextFactory<ApplicationDbContext> dbFactory) : RollupConfiguration<ApplicationDbContext, PointsRollup, PointsRollup.Dimensions>(dbFactory)
 {   
     private record DailyPointLimitDto(DateOnly Date, int Maximum);
 
-    protected override Task MergeAsync(ApplicationDbContext dbContext, PointsView[] data)
+    protected override Task MergeAsync(ApplicationDbContext dbContext, PointsRollup[] data)
     {
         throw new NotImplementedException();
     }
 
-    protected override Task MergeModifiedDimensionsAsync(ApplicationDbContext dbContext, PointsView.Dimensions[] dimensions)
+    protected override Task MergeModifiedDimensionsAsync(ApplicationDbContext dbContext, PointsRollup.Dimensions[] dimensions)
     {
         throw new NotImplementedException();
     }
@@ -105,7 +103,7 @@ internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> d
         return [.. results];
     }
 
-    protected override async Task<PointsView[]> QueryLiveAsync(ApplicationDbContext dbContext, PointsView.Dimensions[] dimensions)
+    protected override async Task<PointsRollup[]> QueryLiveAsync(ApplicationDbContext dbContext, PointsRollup.Dimensions[] dimensions)
     {
         if (dimensions.Length == 0)
         {
@@ -127,7 +125,7 @@ internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> d
             .GroupBy(a => (a.Date, TransportId: a.TransportId ?? 0))
             .ToDictionary(g => g.Key, g => g.Sum(a => a.Points));
 
-        return [.. uniqueDimensions.Select(d => new PointsView
+        return [.. uniqueDimensions.Select(d => new PointsRollup
         {
             Date = d.Date,
             TransportId = d.TransportId,
@@ -137,5 +135,5 @@ internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> d
         })];
     }
 
-    protected override DbSet<PointsView> ViewEntity(ApplicationDbContext db) => db.PointsView;    
+    protected override DbSet<PointsRollup> ViewEntity(ApplicationDbContext db) => db.PointsRollup;    
 }

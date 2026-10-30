@@ -3,10 +3,10 @@ using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace MaterializR.Core;
 
-public abstract class ViewConfigurationBase<TDbContext, TViewEntity, TViewDimensions>(    
+public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensions>(    
     IDbContextFactory<TDbContext> dbFactory) 
     where TDbContext : DbContext
-    where TViewEntity : class, IViewEntity<TViewDimensions>
+    where TViewEntity : class, IRollupEntity<TViewDimensions>
 {    
     protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
 
