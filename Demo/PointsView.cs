@@ -61,7 +61,7 @@ internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> d
         throw new NotImplementedException();
     }
 
-    protected override Task MergeDimensionsAsync(ApplicationDbContext dbContext, PointsView.Dimensions[] dimensions)
+    protected override Task MergeModifiedDimensionsAsync(ApplicationDbContext dbContext, PointsView.Dimensions[] dimensions)
     {
         throw new NotImplementedException();
     }

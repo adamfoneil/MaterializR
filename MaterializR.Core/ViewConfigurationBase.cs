@@ -23,9 +23,9 @@ public abstract class ViewConfigurationBase<TDbContext, TViewEntity, TViewDimens
     protected abstract Task MergeAsync(TDbContext dbContext, TViewEntity[] data);
 
     /// <summary>
-    /// flag dimensions as modified, inserting where they don't
+    /// flag dimensions as modified, inserting where they don't exist
     /// </summary>
-    protected abstract Task MergeDimensionsAsync(TDbContext dbContext, TViewDimensions[] dimensions);
+    protected abstract Task MergeModifiedDimensionsAsync(TDbContext dbContext, TViewDimensions[] dimensions);
 
     protected TViewDimensions[] Added<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
         [.. changeTracker.Entries<TEntity>()
@@ -72,6 +72,6 @@ public abstract class ViewConfigurationBase<TDbContext, TViewEntity, TViewDimens
         changes.AddRange(Modified(changeTracker, selector));
         changes.AddRange(ModifiedOriginal(changeTracker, selector));
         
-        await MergeDimensionsAsync(dbContext, [..changes]);
+        await MergeModifiedDimensionsAsync(dbContext, [..changes]);
     }
 }
