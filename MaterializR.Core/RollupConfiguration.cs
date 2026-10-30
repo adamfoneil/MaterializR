@@ -65,12 +65,12 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
     /// <summary>
     /// should be called from TDbContext.SaveChanges override to set TViewEntity.IsModified = true
     /// </summary>
-    public async Task TrackModifiedAsync<TEntity>(TDbContext dbContext, ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class
+    public async Task TrackModifiedAsync<TEntity>(TDbContext dbContext, Func<TEntity, TViewDimensions> selector) where TEntity : class
     {
         List<TViewDimensions> changes = [];
-        changes.AddRange(Added(changeTracker, selector));
-        changes.AddRange(Modified(changeTracker, selector));
-        changes.AddRange(ModifiedOriginal(changeTracker, selector));
+        changes.AddRange(Added(dbContext.ChangeTracker, selector));
+        changes.AddRange(Modified(dbContext.ChangeTracker, selector));
+        changes.AddRange(ModifiedOriginal(dbContext.ChangeTracker, selector));
         
         await MergeModifiedDimensionsAsync(dbContext, [..changes]);
     }

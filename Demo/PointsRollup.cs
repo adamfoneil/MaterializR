@@ -51,7 +51,7 @@ public class PointsConfiguration : IEntityTypeConfiguration<PointsRollup>
     }
 }
 
-internal class PointsRollupConfiguration(IDbContextFactory<ApplicationDbContext> dbFactory) : RollupConfiguration<ApplicationDbContext, PointsRollup, PointsRollup.Dimensions>(dbFactory)
+public class PointsRollupConfiguration(IDbContextFactory<ApplicationDbContext> dbFactory) : RollupConfiguration<ApplicationDbContext, PointsRollup, PointsRollup.Dimensions>(dbFactory)
 {   
     private record DailyPointLimitDto(DateOnly Date, int Maximum);
 
