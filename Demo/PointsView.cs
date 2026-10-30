@@ -11,7 +11,6 @@ internal class PointsView : IViewEntity<PointsView.Dimensions>
 {
     // dimensions
 
-    public int LocationId { get; set; }
     public DateOnly Date { get; set; }
     /// <summary>
     /// 0 = none, any other value is transport
@@ -19,7 +18,7 @@ internal class PointsView : IViewEntity<PointsView.Dimensions>
     public int TransportId { get; set; }
 
     // you'll need a type that represents the unique index of the cache/view table
-    public record Dimensions(int LocationId, DateOnly Date, int TransportId);
+    public record Dimensions(DateOnly Date, int TransportId);
 
     // facts
 
@@ -34,14 +33,14 @@ internal class PointsView : IViewEntity<PointsView.Dimensions>
 
     public bool IsModified { get; set; }
 
-    public Dimensions ToDimensions() => new(LocationId, Date, TransportId);    
+    public Dimensions ToDimensions() => new(Date, TransportId);    
 }
 
 public class PointsConfiguration : IEntityTypeConfiguration<PointsView>
 {
     void IEntityTypeConfiguration<PointsView>.Configure(EntityTypeBuilder<PointsView> builder)
     {
-        builder.HasIndex(e => new { e.LocationId, e.Date, e.TransportId }).IsUnique();        
+        builder.HasIndex(e => new { e.Date, e.TransportId }).IsUnique();        
 
         builder.Property(e => e.PercentFree)
             .HasComputedColumnSql(
@@ -54,7 +53,7 @@ public class PointsConfiguration : IEntityTypeConfiguration<PointsView>
 
 internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> dbFactory) : ViewConfigurationBase<ApplicationDbContext, PointsView, PointsView.Dimensions>(dbFactory)
 {   
-    private record DailyPointLimitDto(int LocationId, DateOnly Date, int Maximum);
+    private record DailyPointLimitDto(DateOnly Date, int Maximum);
 
     protected override Task MergeAsync(ApplicationDbContext dbContext, PointsView[] data)
     {
@@ -75,44 +74,31 @@ internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> d
 
         var defaults = await db.DailyLimitDefaults
             .AsNoTracking()
-            .Select(d => new { d.LocationId, d.DayOfWeek, d.MaxPoints })
+            .Select(d => new { d.DayOfWeek, d.MaxPoints })
             .ToArrayAsync();
 
         var overrides = await db.DailyLimitOverrides
             .AsNoTracking()
             .Where(o => o.Date >= from && o.Date <= to)
-            .Select(o => new { o.LocationId, o.Date, o.MaxPoints })
+            .Select(o => new { o.Date, o.MaxPoints })
             .ToArrayAsync();
 
-        var defaultLookup = defaults.ToDictionary(
-            d => (d.LocationId, d.DayOfWeek),
-            d => d.MaxPoints);
+        var defaultLookup = defaults.ToDictionary(d => d.DayOfWeek, d => d.MaxPoints);
 
-        var overrideLookup = overrides.ToDictionary(
-            o => (o.LocationId, o.Date),
-            o => o.MaxPoints);
-
-        var locationIds = defaults.Select(d => d.LocationId)
-            .Union(overrides.Select(o => o.LocationId))
-            .Distinct()
-            .OrderBy(id => id)
-            .ToArray();
+        var overrideLookup = overrides.ToDictionary(o => o.Date, o => o.MaxPoints);
 
         var results = new List<DailyPointLimitDto>();
         for (var date = from; date <= to; date = date.AddDays(1))
         {
-            foreach (var locationId in locationIds)
+            if (overrideLookup.TryGetValue(date, out var overrideLimit))
             {
-                if (overrideLookup.TryGetValue((locationId, date), out var overrideLimit))
-                {
-                    results.Add(new DailyPointLimitDto(locationId, date, overrideLimit));
-                    continue;
-                }
+                results.Add(new DailyPointLimitDto(date, overrideLimit));
+                continue;
+            }
 
-                if (defaultLookup.TryGetValue((locationId, date.DayOfWeek), out var defaultLimit))
-                {
-                    results.Add(new DailyPointLimitDto(locationId, date, defaultLimit));
-                }
+            if (defaultLookup.TryGetValue(date.DayOfWeek, out var defaultLimit))
+            {
+                results.Add(new DailyPointLimitDto(date, defaultLimit));
             }
         }
 
@@ -131,25 +117,22 @@ internal class PointsViewConfiguration(IDbContextFactory<ApplicationDbContext> d
         var to = uniqueDimensions.Max(d => d.Date);
 
         var dailyLimits = await DailyPointLimitsAsync(dbContext, from, to);
-        var dailyLimitLookup = dailyLimits.ToDictionary(l => (l.LocationId, l.Date), l => l.Maximum);
-
-        var locationIds = uniqueDimensions.Select(d => d.LocationId).Distinct().ToArray();
+        var dailyLimitLookup = dailyLimits.ToDictionary(l => l.Date, l => l.Maximum);
 
         var scheduledLookup = (await dbContext.Appointments
             .AsNoTracking()
-            .Where(a => a.Date >= from && a.Date <= to && locationIds.Contains(a.LocationId))
+            .Where(a => a.Date >= from && a.Date <= to)
             .ToArrayAsync())
             .Where(a => a.AffectsCapacity())
-            .GroupBy(a => (a.LocationId, a.Date, TransportId: a.TransportId ?? 0))
+            .GroupBy(a => (a.Date, TransportId: a.TransportId ?? 0))
             .ToDictionary(g => g.Key, g => g.Sum(a => a.Points));
 
         return [.. uniqueDimensions.Select(d => new PointsView
         {
-            LocationId = d.LocationId,
             Date = d.Date,
             TransportId = d.TransportId,
-            Maximum = dailyLimitLookup.GetValueOrDefault((d.LocationId, d.Date)),
-            Scheduled = scheduledLookup.GetValueOrDefault((d.LocationId, d.Date, d.TransportId)),
+            Maximum = dailyLimitLookup.GetValueOrDefault(d.Date),
+            Scheduled = scheduledLookup.GetValueOrDefault((d.Date, d.TransportId)),
             PercentFree = 0
         })];
     }
