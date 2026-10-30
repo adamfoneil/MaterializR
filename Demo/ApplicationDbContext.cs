@@ -1,8 +1,10 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 
 namespace Demo;
 
-internal class ApplicationDbContext : DbContext
+public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : DbContext(options)
 {
     /// <summary>
     /// rollup/view entity
@@ -11,4 +13,14 @@ internal class ApplicationDbContext : DbContext
     public DbSet<Appointment> Appointments { get; set; }
     public DbSet<DailyLimitDefault> DailyLimitDefaults { get; set; }
     public DbSet<DailyLimitOverride> DailyLimitOverrides { get; set; }
+}
+
+public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<ApplicationDbContext>
+{
+    public ApplicationDbContext CreateDbContext(string[] args)
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
+        optionsBuilder.UseSqlite("Data Source=Data\\demo.db");
+        return new ApplicationDbContext(optionsBuilder.Options);
+    }
 }

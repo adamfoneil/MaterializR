@@ -5,8 +5,10 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Demo;
 
-internal class PointsRollup : IRollupEntity<PointsRollup.Dimensions>
+public class PointsRollup : IRollupEntity<PointsRollup.Dimensions>
 {
+    public int Id { get; set; }
+
     // dimensions
 
     public DateOnly Date { get; set; }
