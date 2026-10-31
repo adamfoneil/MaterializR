@@ -132,6 +132,11 @@ public abstract class RollupConfiguration<TDbContext, TCacheEntity, TCacheDimens
             .Where(e => e.State == EntityState.Modified)
             .Select(e => (false, selector((TEntity)e.OriginalValues.ToObject()))).Distinct()];
 
+    private static IEnumerable<(bool Inserted, TCacheDimensions Dimensions)> Deleted<TEntity>(ChangeTracker changeTracker, Func<TEntity, TCacheDimensions> selector) where TEntity : class =>
+        [.. changeTracker.Entries<TEntity>()
+            .Where(e => e.State == EntityState.Deleted)
+            .Select(e => (false, selector((TEntity)e.OriginalValues.ToObject()))).Distinct()];        
+
     public async Task<int> UpdateAsync()
     {
         using var db = DbFactory.CreateDbContext();
@@ -166,6 +171,7 @@ public abstract class RollupConfiguration<TDbContext, TCacheEntity, TCacheDimens
         changes.AddRange(Added(dbContext.ChangeTracker, selector));
         changes.AddRange(Modified(dbContext.ChangeTracker, selector));
         changes.AddRange(ModifiedOriginal(dbContext.ChangeTracker, selector));
+        changes.AddRange(Deleted(dbContext.ChangeTracker, selector));
         return [..changes];
     }
 
