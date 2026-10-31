@@ -5,7 +5,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Demo;
 
-public class PointsRollup : IRollupEntity<PointsRollup.Dimensions>
+public class PointsRollup : IRollupEntity
 {
     public int Id { get; set; }
 
@@ -31,9 +31,7 @@ public class PointsRollup : IRollupEntity<PointsRollup.Dimensions>
     [NotMapped]
     public decimal PercentFreeLive => Maximum > 0 ? (Maximum - Scheduled) / Maximum : 0;
 
-    public bool IsModified { get; set; }
-
-    public Dimensions ToDimensions() => new(Date, TransportId);    
+    public bool IsModified { get; set; } = true;
 }
 
 public class PointsConfiguration : IEntityTypeConfiguration<PointsRollup>
@@ -55,14 +53,20 @@ public class PointsRollupConfiguration(IDbContextFactory<ApplicationDbContext> d
 {   
     private record DailyPointLimitDto(DateOnly Date, int Maximum);
 
-    protected override Task MergeAsync(ApplicationDbContext dbContext, PointsRollup[] data)
+    protected override Task<PointsRollup[]> ExistingRowsAsync(ApplicationDbContext dbContext, PointsRollup.Dimensions[] dimensions)
     {
-        throw new NotImplementedException();
-    }
+        if (dimensions.Length == 0)
+        {
+            return Task.FromResult(Array.Empty<PointsRollup>());
+        }
 
-    protected override Task MergeModifiedDimensionsAsync(ApplicationDbContext dbContext, PointsRollup.Dimensions[] dimensions)
-    {
-        throw new NotImplementedException();
+        var uniqueDimensions = dimensions.Distinct().ToArray();
+        var dates = uniqueDimensions.Select(d => d.Date).Distinct().ToArray();
+        var transportIds = uniqueDimensions.Select(d => d.TransportId).Distinct().ToArray();
+
+        return dbContext.PointsRollup
+            .Where(row => dates.Contains(row.Date) && transportIds.Contains(row.TransportId))
+            .ToArrayAsync();
     }
 
     private static async Task<DailyPointLimitDto[]> DailyPointLimitsAsync(ApplicationDbContext db, DateOnly from, DateOnly to)
@@ -137,5 +141,13 @@ public class PointsRollupConfiguration(IDbContextFactory<ApplicationDbContext> d
         })];
     }
 
-    protected override DbSet<PointsRollup> ViewEntity(ApplicationDbContext db) => db.PointsRollup;    
+    protected override DbSet<PointsRollup> RollupEntityDbSet(ApplicationDbContext db) => db.PointsRollup;
+
+    protected override PointsRollup FromDimensions(PointsRollup.Dimensions dimensions) => new()
+    {
+        Date = dimensions.Date,
+        TransportId = dimensions.TransportId
+    };
+
+    protected override PointsRollup.Dimensions ToDimensions(PointsRollup entity) => new(entity.Date, entity.TransportId); 
 }

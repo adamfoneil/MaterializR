@@ -3,12 +3,10 @@
 /// <summary>
 /// describes an entity intended to store calculations (facts)
 /// </summary>
-/// <typeparam name="TDimensions">represents the combination of unique properties</typeparam>
-public interface IRollupEntity<TDimensions>
+public interface IRollupEntity
 {
     /// <summary>
     /// indicates that underlying data has changed and this view row needs to be refreshed
     /// </summary>
-    bool IsModified { get; set; }
-    TDimensions ToDimensions();
+    bool IsModified { get; set; }    
 }

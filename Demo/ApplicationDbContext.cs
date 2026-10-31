@@ -19,9 +19,13 @@ public class ApplicationDbContext(
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        await _pointsRollup.TrackModifiedAsync<Appointment>(this, (appt) => new PointsRollup.Dimensions(appt.Date, appt.TransportId ?? 0));
+        var apptChanges = _pointsRollup.GetDimensionChanges<Appointment>(this);
 
-        return await base.SaveChangesAsync(cancellationToken);
+        var result = await base.SaveChangesAsync(cancellationToken);
+
+        await _pointsRollup.TrackDimensionChangesAsync(this, apptChanges);
+
+        return result;
     }
 }
 

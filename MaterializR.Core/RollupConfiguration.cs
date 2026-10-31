@@ -6,11 +6,16 @@ namespace MaterializR.Core;
 public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensions>(    
     IDbContextFactory<TDbContext> dbFactory) 
     where TDbContext : DbContext
-    where TViewEntity : class, IRollupEntity<TViewDimensions>
+    where TViewEntity : class, IRollupEntity
+    where TViewDimensions : notnull
 {    
     protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
 
-    protected abstract DbSet<TViewEntity> ViewEntity(TDbContext db);
+    protected abstract DbSet<TViewEntity> RollupEntityDbSet(TDbContext db);
+
+    protected abstract TViewEntity FromDimensions(TViewDimensions dimensions);
+
+    protected abstract TViewDimensions ToDimensions(TViewEntity entity);
 
     /// <summary>
     /// query that returns the live view data for a set of dimensions
@@ -20,27 +25,92 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
     /// <summary>
     /// upsert queried live data into the cache/view table
     /// </summary>
-    protected abstract Task MergeAsync(TDbContext dbContext, TViewEntity[] data);
+    protected virtual async Task MergeAsync(TDbContext dbContext, TViewEntity[] data)
+    {
+        if (data.Length == 0)
+        {
+            return;
+        }
+
+        var incomingByDimensions = data
+            .GroupBy(row => ToDimensions(row))
+            .ToDictionary(g => g.Key, g => g.Last());
+
+        var dimensions = incomingByDimensions.Keys.ToArray();
+        var existingRows = await ExistingRowsAsync(dbContext, dimensions);
+        var existingByDimensions = existingRows.ToDictionary(row => ToDimensions(row));
+        var dbSet = RollupEntityDbSet(dbContext);
+
+        foreach (var (dimension, incomingRow) in incomingByDimensions)
+        {
+            if (existingByDimensions.TryGetValue(dimension, out var existingRow))
+            {
+                dbContext.Entry(existingRow).CurrentValues.SetValues(incomingRow);
+            }
+            else
+            {
+                dbSet.Add(incomingRow);
+            }
+        }
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// fetch existing rollup rows for a dimension batch so they can be marked modified
+    /// </summary>
+    protected virtual Task<TViewEntity[]> ExistingRowsAsync(TDbContext dbContext, TViewDimensions[] dimensions) =>
+        RollupEntityDbSet(dbContext).ToArrayAsync();
 
     /// <summary>
     /// flag dimensions as modified, inserting where they don't exist
     /// </summary>
-    protected abstract Task MergeModifiedDimensionsAsync(TDbContext dbContext, TViewDimensions[] dimensions);
+    public async Task TrackDimensionChangesAsync(TDbContext dbContext, (bool Inserted, TViewDimensions Dimensions)[] changes)
+    {
+        if (!changes.Any()) return;
 
-    protected TViewDimensions[] Added<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
+        foreach (var (_, dim) in changes.Where(d => d.Inserted).Distinct())
+        {
+            RollupEntityDbSet(dbContext).Add(FromDimensions(dim));
+        }
+
+        var modifiedDimensions = changes
+            .Where(d => !d.Inserted)
+            .Select(d => d.Dimensions)
+            .Distinct()
+            .ToArray();
+
+        if (modifiedDimensions.Length > 0)
+        {
+            var modifiedLookup = modifiedDimensions.ToHashSet();
+            var existingRows = await ExistingRowsAsync(dbContext, modifiedDimensions);
+
+            foreach (var entity in existingRows)
+            {
+                if (modifiedLookup.Contains(ToDimensions(entity)))
+                {
+                    entity.IsModified = true;
+                }
+            }
+        }
+        
+        await dbContext.SaveChangesAsync();
+    }
+
+    protected (bool Inserted, TViewDimensions Dimensions)[] Added<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
         [.. changeTracker.Entries<TEntity>()
             .Where(e => e.State == EntityState.Added)
-            .Select(e => selector(e.Entity)).Distinct()];
+            .Select(e => (true, selector(e.Entity))).Distinct()];
 
-    protected TViewDimensions[] Modified<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
+    protected (bool Inserted, TViewDimensions Dimensions)[] Modified<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
         [.. changeTracker.Entries<TEntity>()
             .Where(e => e.State == EntityState.Modified)
-            .Select(e => selector(e.Entity)).Distinct()];
+            .Select(e => (false, selector(e.Entity))).Distinct()];
 
-    protected TViewDimensions[] ModifiedOriginal<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
+    protected (bool Inserted, TViewDimensions Dimensions)[] ModifiedOriginal<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
         [.. changeTracker.Entries<TEntity>()
             .Where(e => e.State == EntityState.Modified)
-            .Select(e => selector((TEntity)e.OriginalValues.ToObject())).Distinct()];
+            .Select(e => (false, selector((TEntity)e.OriginalValues.ToObject()))).Distinct()];
 
     public async Task UpdateAsync()
     {
@@ -49,10 +119,10 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
 
         try
         {
-            var dimensions = await ViewEntity(db).AsNoTracking().Where(row => row.IsModified).Select(row => row.ToDimensions()).ToArrayAsync();            
+            var dimensions = await RollupEntityDbSet(db).AsNoTracking().Where(row => row.IsModified).Select(row => ToDimensions(row)).ToArrayAsync();            
             var liveData = await QueryLiveAsync(db, dimensions);
             await MergeAsync(db, liveData);
-            await ViewEntity(db).Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));
+            await RollupEntityDbSet(db).Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));
             await txn.CommitAsync();
         }
         catch 
@@ -62,16 +132,12 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
         }        
     }
 
-    /// <summary>
-    /// should be called from TDbContext.SaveChanges override to set TViewEntity.IsModified = true
-    /// </summary>
-    public async Task TrackModifiedAsync<TEntity>(TDbContext dbContext, Func<TEntity, TViewDimensions> selector) where TEntity : class
+    public (bool Inserted, TViewDimensions Dimensions)[] GetDimensionChanges<TEntity>(TDbContext dbContext) where TEntity : class
     {
-        List<TViewDimensions> changes = [];
-        changes.AddRange(Added(dbContext.ChangeTracker, selector));
-        changes.AddRange(Modified(dbContext.ChangeTracker, selector));
-        changes.AddRange(ModifiedOriginal(dbContext.ChangeTracker, selector));
-        
-        await MergeModifiedDimensionsAsync(dbContext, [..changes]);
+        List<(bool Inserted, TViewDimensions Dimensions)> changes = [];
+        changes.AddRange(Added<TViewEntity>(dbContext.ChangeTracker, ToDimensions));
+        changes.AddRange(Modified<TViewEntity>(dbContext.ChangeTracker, ToDimensions));
+        changes.AddRange(ModifiedOriginal<TViewEntity>(dbContext.ChangeTracker, ToDimensions));
+        return [..changes];
     }
 }
