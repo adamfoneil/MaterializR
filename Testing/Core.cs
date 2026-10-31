@@ -32,13 +32,17 @@ public sealed class Core
         await db.Appointments.ExecuteDeleteAsync();
 
         await SetScheduleLimitsAsync(db);
-        var (appts, from, to) = await CreateSampleAppointments(db, 15, 7);
+        var (appts, from, to) = await CreateSampleAppointments(db, 25, 7);
 
         var rollupData = await PointsRollupConfiguration.QueryLiveImplementationAsync(db, from, to);
 
         var rollup = scope.ServiceProvider.GetRequiredService<PointsRollupConfiguration>();
         // all inserted
         await rollup.UpdateAsync();
+
+        var rollupResults = await db.PointsRollup.AsNoTracking().ToArrayAsync();
+
+        // assert that the rollup results match the live query results
 
         // todo: update a few random appointments (change the dates, cancel a few), delete a few, then run the rollup again and verify the results
 

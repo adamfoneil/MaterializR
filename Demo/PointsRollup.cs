@@ -3,9 +3,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Microsoft.Extensions.Logging;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Diagnostics;
 
 namespace Demo;
 
+[DebuggerDisplay("{Date} - {TransportId} - {Scheduled}/{Maximum} ({PercentFreeLive})")]
 public class PointsRollup : IRollupEntity
 {
     public int Id { get; set; }
@@ -30,7 +32,7 @@ public class PointsRollup : IRollupEntity
     public int AvailableLive => Maximum - Scheduled;
     public decimal PercentFree { get; set; }
     [NotMapped]
-    public decimal PercentFreeLive => Maximum > 0 ? (Maximum - Scheduled) / Maximum : 0;
+    public decimal PercentFreeLive => Maximum > 0 ? (decimal)(Maximum - Scheduled) / Maximum : 0m;
 
     public bool IsModified { get; set; } = true;
 }
