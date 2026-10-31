@@ -143,6 +143,12 @@ public class PointsRollupConfiguration(IDbContextFactory<ApplicationDbContext> d
 
     protected override DbSet<PointsRollup> RollupEntityDbSet(ApplicationDbContext db) => db.PointsRollup;
 
+    protected override void ApplyIncomingValues(PointsRollup existingRow, PointsRollup incomingRow)
+    {
+        existingRow.Maximum = incomingRow.Maximum;
+        existingRow.Scheduled = incomingRow.Scheduled;
+    }
+
     protected override PointsRollup FromDimensions(PointsRollup.Dimensions dimensions) => new()
     {
         Date = dimensions.Date,

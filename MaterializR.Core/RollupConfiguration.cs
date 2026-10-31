@@ -18,6 +18,11 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
     protected abstract TViewDimensions ToDimensions(TViewEntity entity);
 
     /// <summary>
+    /// apply incoming values to an existing row, excluding key properties
+    /// </summary>
+    protected abstract void ApplyIncomingValues(TViewEntity existingRow, TViewEntity incomingRow);
+
+    /// <summary>
     /// query that returns the live view data for a set of dimensions
     /// </summary>
     protected abstract Task<TViewEntity[]> QueryLiveAsync(TDbContext dbContext, TViewDimensions[] dimensions);
@@ -45,7 +50,7 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
         {
             if (existingByDimensions.TryGetValue(dimension, out var existingRow))
             {
-                dbContext.Entry(existingRow).CurrentValues.SetValues(incomingRow);
+                ApplyIncomingValues(existingRow, incomingRow);
             }
             else
             {
@@ -119,8 +124,10 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
 
         try
         {
-            var dimensions = await RollupEntityDbSet(db).AsNoTracking().Where(row => row.IsModified).Select(row => ToDimensions(row)).ToArrayAsync();            
-            var liveData = await QueryLiveAsync(db, dimensions);
+            var dimensions = await RollupEntityDbSet(db).AsNoTracking().Where(row => row.IsModified).ToArrayAsync();
+            if (!dimensions.Any()) return;
+            var dimensionKeys = dimensions.Select(row => ToDimensions(row)).ToArray();
+            var liveData = await QueryLiveAsync(db, dimensionKeys);
             await MergeAsync(db, liveData);
             await RollupEntityDbSet(db).Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));
             await txn.CommitAsync();
