@@ -132,12 +132,12 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
         }        
     }
 
-    public (bool Inserted, TViewDimensions Dimensions)[] GetDimensionChanges<TEntity>(TDbContext dbContext) where TEntity : class
+    public (bool Inserted, TViewDimensions Dimensions)[] GetDimensionChanges<TEntity>(TDbContext dbContext, Func<TEntity, TViewDimensions> selector) where TEntity : class
     {
         List<(bool Inserted, TViewDimensions Dimensions)> changes = [];
-        changes.AddRange(Added<TViewEntity>(dbContext.ChangeTracker, ToDimensions));
-        changes.AddRange(Modified<TViewEntity>(dbContext.ChangeTracker, ToDimensions));
-        changes.AddRange(ModifiedOriginal<TViewEntity>(dbContext.ChangeTracker, ToDimensions));
+        changes.AddRange(Added(dbContext.ChangeTracker, selector));
+        changes.AddRange(Modified(dbContext.ChangeTracker, selector));
+        changes.AddRange(ModifiedOriginal(dbContext.ChangeTracker, selector));
         return [..changes];
     }
 }

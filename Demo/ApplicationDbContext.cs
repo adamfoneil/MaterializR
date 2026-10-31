@@ -19,7 +19,7 @@ public class ApplicationDbContext(
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        var apptChanges = _pointsRollup.GetDimensionChanges<Appointment>(this);
+        var apptChanges = _pointsRollup.GetDimensionChanges<Appointment>(this, a => new PointsRollup.Dimensions(a.Date, a.TransportId ?? 0));
 
         var result = await base.SaveChangesAsync(cancellationToken);
 
@@ -31,7 +31,16 @@ public class ApplicationDbContext(
 
 public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<ApplicationDbContext>, IDbContextFactory<ApplicationDbContext>
 {
-    public const string ConnectionString = "Data Source=Data\\demo.db";
+    public static string ConnectionString
+    {
+        get
+        {
+            var dataDirectory = Path.Combine(AppContext.BaseDirectory, "Data");
+            Directory.CreateDirectory(dataDirectory);
+            var dbPath = Path.Combine(dataDirectory, "demo.db");
+            return $"Data Source={dbPath}";
+        }
+    }
 
     public static void Configure(DbContextOptionsBuilder optionsBuilder)
     {
