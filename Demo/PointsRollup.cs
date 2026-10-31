@@ -125,6 +125,9 @@ public class PointsRollupConfiguration(
         return await QueryLiveImplementationAsync(dbContext, from, to);        
     }
 
+    /// <summary>
+    /// this is really for test purposes to make the low-level query results observable
+    /// </summary>
     public static async Task<PointsRollup[]> QueryLiveImplementationAsync(ApplicationDbContext db, DateOnly from, DateOnly to)
     {
         var dailyLimits = await DailyPointLimitsAsync(db, from, to);
