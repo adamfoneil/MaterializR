@@ -6,6 +6,8 @@ using System.Runtime.CompilerServices;
 
 namespace MaterializR.Core;
 
+public record DimensionChangesResult(int Inserted, int Updated);
+
 public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensions>(
     ILogger<RollupConfiguration<TDbContext, TViewEntity, TViewDimensions>> logger,
     IDbContextFactory<TDbContext> dbFactory) 
@@ -76,12 +78,12 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
     /// <summary>
     /// flag dimensions as modified, inserting where they don't exist
     /// </summary>
-    public async Task TrackDimensionChangesAsync(TDbContext dbContext, (bool Inserted, TViewDimensions Dimensions)[] changes)
+    public async Task<DimensionChangesResult> TrackDimensionChangesAsync(TDbContext dbContext, (bool Inserted, TViewDimensions Dimensions)[] changes)
     {
-        if (!changes.Any()) return;
+        if (!changes.Any()) return new(0, 0);
 
-        await TrackDuration(async () =>
-        {
+        return await TrackDuration(async () =>
+        {            
             foreach (var (_, dim) in changes.Where(d => d.Inserted).Distinct())
             {
                 RollupEntityDbSet(dbContext).Add(FromDimensions(dim));
@@ -108,7 +110,11 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
             }
 
             await dbContext.SaveChangesAsync();
-        });        
+
+            return new DimensionChangesResult(
+                Inserted: changes.Count(d => d.Inserted),
+                Updated: changes.Count(d => !d.Inserted));
+        });
     }
 
     protected (bool Inserted, TViewDimensions Dimensions)[] Added<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
@@ -126,22 +132,24 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
             .Where(e => e.State == EntityState.Modified)
             .Select(e => (false, selector((TEntity)e.OriginalValues.ToObject()))).Distinct()];
 
-    public async Task UpdateAsync()
+    public async Task<int> UpdateAsync()
     {
         using var db = DbFactory.CreateDbContext();
         using var txn = db.Database.BeginTransaction();
 
-        await TrackDuration(async () =>
+        return await TrackDuration(async () =>
         {
             try
             {
                 var dimensions = await RollupEntityDbSet(db).AsNoTracking().Where(row => row.IsModified).ToArrayAsync();
-                if (!dimensions.Any()) return;
+                if (!dimensions.Any()) return 0;
                 var dimensionKeys = dimensions.Select(row => ToDimensions(row)).ToArray();
                 var liveData = await QueryLiveAsync(db, dimensionKeys);
                 await MergeAsync(db, liveData);
-                await RollupEntityDbSet(db).Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));
+                int result = await RollupEntityDbSet(db).Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));
                 await txn.CommitAsync();
+
+                return result;
             }
             catch (Exception exc)
             {
@@ -164,13 +172,13 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
     /// <summary>
     /// use in public methods only
     /// </summary>
-    private async Task TrackDuration(Func<Task> action, [CallerMemberName]string? methodName = null)
+    private async Task<T> TrackDuration<T>(Func<Task<T>> action, [CallerMemberName]string? methodName = null)
     {
         var stopwatch = Stopwatch.StartNew();
 
         try
         {
-            await action();
+            return await action();
         }        
         finally
         {
