@@ -1,12 +1,12 @@
 ﻿namespace MaterializR.Core;
 
 /// <summary>
-/// describes an entity intended to store calculations (facts)
+/// describes an entity intended to store calculations or aggregates of some kind (facts)
 /// </summary>
-public interface IRollupEntity
+public interface ICacheEntity
 {
     /// <summary>
-    /// indicates that underlying data has changed and this view row needs to be refreshed
+    /// indicates that underlying/related source data has changed and this row needs to be refreshed
     /// </summary>
     bool IsModified { get; set; }    
 }

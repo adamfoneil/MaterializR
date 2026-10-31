@@ -8,7 +8,7 @@ using System.Diagnostics;
 namespace Demo;
 
 [DebuggerDisplay("{Date} - {TransportId} - {Scheduled}/{Maximum} ({PercentFreeLive})")]
-public class PointsRollup : IRollupEntity
+public class PointsRollup : ICacheEntity
 {
     public int Id { get; set; }
 
@@ -150,9 +150,9 @@ public class PointsRollupConfiguration(
         })];
     }
 
-    protected override DbSet<PointsRollup> RollupEntityDbSet(ApplicationDbContext db) => db.PointsRollup;
+    protected override DbSet<PointsRollup> RollupDbSet(ApplicationDbContext db) => db.PointsRollup;
 
-    protected override void ApplyIncomingValues(PointsRollup existingRow, PointsRollup incomingRow)
+    protected override void UpdateFacts(PointsRollup existingRow, PointsRollup incomingRow)
     {
         existingRow.Maximum = incomingRow.Maximum;
         existingRow.Scheduled = incomingRow.Scheduled;
