@@ -1,14 +1,20 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.Extensions.Logging;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 
 namespace MaterializR.Core;
 
-public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensions>(    
+public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensions>(
+    ILogger<RollupConfiguration<TDbContext, TViewEntity, TViewDimensions>> logger,
     IDbContextFactory<TDbContext> dbFactory) 
     where TDbContext : DbContext
     where TViewEntity : class, IRollupEntity
     where TViewDimensions : notnull
-{    
+{
+    protected readonly ILogger<RollupConfiguration<TDbContext, TViewEntity, TViewDimensions>> Logger = logger;
+
     protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
 
     protected abstract DbSet<TViewEntity> RollupEntityDbSet(TDbContext db);
@@ -74,32 +80,35 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
     {
         if (!changes.Any()) return;
 
-        foreach (var (_, dim) in changes.Where(d => d.Inserted).Distinct())
+        await TrackDuration(async () =>
         {
-            RollupEntityDbSet(dbContext).Add(FromDimensions(dim));
-        }
-
-        var modifiedDimensions = changes
-            .Where(d => !d.Inserted)
-            .Select(d => d.Dimensions)
-            .Distinct()
-            .ToArray();
-
-        if (modifiedDimensions.Length > 0)
-        {
-            var modifiedLookup = modifiedDimensions.ToHashSet();
-            var existingRows = await ExistingRowsAsync(dbContext, modifiedDimensions);
-
-            foreach (var entity in existingRows)
+            foreach (var (_, dim) in changes.Where(d => d.Inserted).Distinct())
             {
-                if (modifiedLookup.Contains(ToDimensions(entity)))
+                RollupEntityDbSet(dbContext).Add(FromDimensions(dim));
+            }
+
+            var modifiedDimensions = changes
+                .Where(d => !d.Inserted)
+                .Select(d => d.Dimensions)
+                .Distinct()
+                .ToArray();
+
+            if (modifiedDimensions.Length > 0)
+            {
+                var modifiedLookup = modifiedDimensions.ToHashSet();
+                var existingRows = await ExistingRowsAsync(dbContext, modifiedDimensions);
+
+                foreach (var entity in existingRows)
                 {
-                    entity.IsModified = true;
+                    if (modifiedLookup.Contains(ToDimensions(entity)))
+                    {
+                        entity.IsModified = true;
+                    }
                 }
             }
-        }
-        
-        await dbContext.SaveChangesAsync();
+
+            await dbContext.SaveChangesAsync();
+        });        
     }
 
     protected (bool Inserted, TViewDimensions Dimensions)[] Added<TEntity>(ChangeTracker changeTracker, Func<TEntity, TViewDimensions> selector) where TEntity : class =>
@@ -122,21 +131,25 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
         using var db = DbFactory.CreateDbContext();
         using var txn = db.Database.BeginTransaction();
 
-        try
+        await TrackDuration(async () =>
         {
-            var dimensions = await RollupEntityDbSet(db).AsNoTracking().Where(row => row.IsModified).ToArrayAsync();
-            if (!dimensions.Any()) return;
-            var dimensionKeys = dimensions.Select(row => ToDimensions(row)).ToArray();
-            var liveData = await QueryLiveAsync(db, dimensionKeys);
-            await MergeAsync(db, liveData);
-            await RollupEntityDbSet(db).Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));
-            await txn.CommitAsync();
-        }
-        catch 
-        {
-            await txn.RollbackAsync();
-            throw;
-        }        
+            try
+            {
+                var dimensions = await RollupEntityDbSet(db).AsNoTracking().Where(row => row.IsModified).ToArrayAsync();
+                if (!dimensions.Any()) return;
+                var dimensionKeys = dimensions.Select(row => ToDimensions(row)).ToArray();
+                var liveData = await QueryLiveAsync(db, dimensionKeys);
+                await MergeAsync(db, liveData);
+                await RollupEntityDbSet(db).Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));
+                await txn.CommitAsync();
+            }
+            catch (Exception exc)
+            {
+                await txn.RollbackAsync();
+                Logger.LogError(exc, "Error in UpdateAsync");                
+                throw;
+            }
+        });        
     }
 
     public (bool Inserted, TViewDimensions Dimensions)[] GetDimensionChanges<TEntity>(TDbContext dbContext, Func<TEntity, TViewDimensions> selector) where TEntity : class
@@ -146,5 +159,26 @@ public abstract class RollupConfiguration<TDbContext, TViewEntity, TViewDimensio
         changes.AddRange(Modified(dbContext.ChangeTracker, selector));
         changes.AddRange(ModifiedOriginal(dbContext.ChangeTracker, selector));
         return [..changes];
+    }
+
+    /// <summary>
+    /// use in public methods only
+    /// </summary>
+    private async Task TrackDuration(Func<Task> action, [CallerMemberName]string? methodName = null)
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            await action();
+        }        
+        finally
+        {
+            stopwatch.Stop();
+            if (Logger.IsEnabled(LogLevel.Information))
+            {
+                Logger.LogInformation("Rollup operation {MethodName} completed in {ElapsedMilliseconds} ms", methodName, stopwatch.ElapsedMilliseconds);
+            }
+        }        
     }
 }

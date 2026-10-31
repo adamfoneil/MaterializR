@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.Extensions.Logging;
 
 namespace Demo;
 
@@ -51,7 +52,8 @@ public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<Applicati
     {
         var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
         Configure(optionsBuilder);
-        return new ApplicationDbContext(optionsBuilder.Options, new PointsRollupConfiguration(this));
+        var logger = new LoggerFactory().CreateLogger<PointsRollupConfiguration>();
+        return new ApplicationDbContext(optionsBuilder.Options, new PointsRollupConfiguration(logger, this));
     }
 
     public ApplicationDbContext CreateDbContext(string[] args) => CreateDbContext();

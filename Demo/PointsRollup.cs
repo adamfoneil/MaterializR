@@ -1,6 +1,7 @@
 ﻿using MaterializR.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Microsoft.Extensions.Logging;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Demo;
@@ -49,7 +50,9 @@ public class PointsConfiguration : IEntityTypeConfiguration<PointsRollup>
     }
 }
 
-public class PointsRollupConfiguration(IDbContextFactory<ApplicationDbContext> dbFactory) : RollupConfiguration<ApplicationDbContext, PointsRollup, PointsRollup.Dimensions>(dbFactory)
+public class PointsRollupConfiguration(
+    ILogger<PointsRollupConfiguration> logger,
+    IDbContextFactory<ApplicationDbContext> dbFactory) : RollupConfiguration<ApplicationDbContext, PointsRollup, PointsRollup.Dimensions>(logger, dbFactory)
 {   
     private record DailyPointLimitDto(DateOnly Date, int Maximum);
 
@@ -111,33 +114,34 @@ public class PointsRollupConfiguration(IDbContextFactory<ApplicationDbContext> d
 
     protected override async Task<PointsRollup[]> QueryLiveAsync(ApplicationDbContext dbContext, PointsRollup.Dimensions[] dimensions)
     {
-        if (dimensions.Length == 0)
-        {
-            return [];
-        }
+        if (!dimensions.Any()) return [];
 
         var uniqueDimensions = dimensions.Distinct().ToArray();
         var from = uniqueDimensions.Min(d => d.Date);
         var to = uniqueDimensions.Max(d => d.Date);
 
-        var dailyLimits = await DailyPointLimitsAsync(dbContext, from, to);
+        return await QueryLiveImplementationAsync(dbContext, from, to);        
+    }
+
+    public static async Task<PointsRollup[]> QueryLiveImplementationAsync(ApplicationDbContext db, DateOnly from, DateOnly to)
+    {
+        var dailyLimits = await DailyPointLimitsAsync(db, from, to);
         var dailyLimitLookup = dailyLimits.ToDictionary(l => l.Date, l => l.Maximum);
 
-        var scheduledLookup = (await dbContext.Appointments
+        var scheduledLookup = (await db.Appointments
             .AsNoTracking()
             .Where(a => a.Date >= from && a.Date <= to)
-            .ToArrayAsync())
-            .Where(a => a.AffectsCapacity())
+            .Where(Appointment.AffectsCapacityExpression)
+            .ToArrayAsync())            
             .GroupBy(a => (a.Date, TransportId: a.TransportId ?? 0))
             .ToDictionary(g => g.Key, g => g.Sum(a => a.Points));
 
-        return [.. uniqueDimensions.Select(d => new PointsRollup
+        return [.. scheduledLookup.Select(d => new PointsRollup
         {
-            Date = d.Date,
-            TransportId = d.TransportId,
-            Maximum = dailyLimitLookup.GetValueOrDefault(d.Date),
-            Scheduled = scheduledLookup.GetValueOrDefault((d.Date, d.TransportId)),
-            PercentFree = 0
+            Date = d.Key.Date,
+            TransportId = d.Key.TransportId,
+            Maximum = dailyLimitLookup.GetValueOrDefault(d.Key.Date),
+            Scheduled = scheduledLookup.GetValueOrDefault((d.Key.Date, d.Key.TransportId))
         })];
     }
 

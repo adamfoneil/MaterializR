@@ -1,5 +1,7 @@
 ﻿namespace Demo;
 
+using System.Linq.Expressions;
+
 public enum AppointmentStatus
 {
     Scheduled,
@@ -19,10 +21,18 @@ public class Appointment
     public AppointmentStatus Status { get; set; }
     public int Points { get; set; }
 
-    public bool AffectsCapacity() => Status switch
-    {
-        AppointmentStatus.Scheduled => true,
-        AppointmentStatus.Completed => true,
-        _ => false
-    };
+    public static readonly Expression<Func<Appointment, bool>> AffectsCapacityExpression =
+        a => a.Status == AppointmentStatus.Scheduled
+          || a.Status == AppointmentStatus.Completed;
+
+    private static readonly Func<Appointment, bool> AffectsCapacityFunc =
+        AffectsCapacityExpression.Compile();
+
+    public bool AffectsCapacity() => AffectsCapacityFunc(this);
+}
+
+public static class AppointmentPredicates
+{
+    public static readonly Expression<Func<Appointment, bool>> AffectsCapacity =
+        Appointment.AffectsCapacityExpression;
 }
