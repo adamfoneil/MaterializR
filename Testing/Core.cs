@@ -34,6 +34,8 @@ public sealed class Core
         await SetScheduleLimitsAsync(db);
         var (appts, from, to) = await CreateSampleAppointments(db, 25, 7);
 
+        // assert that we have dimensions for each day in the range
+
         var rollupData = await PointsRollupConfiguration.QueryLiveImplementationAsync(db, from, to);
 
         var rollup = scope.ServiceProvider.GetRequiredService<PointsRollupConfiguration>();
