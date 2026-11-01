@@ -68,10 +68,10 @@ namespace Demo.Migrations
 
                     b.HasIndex("AppointmentId");
 
-                    b.ToTable("AppointmentItem");
+                    b.ToTable("AppointmentItems");
                 });
 
-            modelBuilder.Entity("Demo.AppointmentPrice", b =>
+            modelBuilder.Entity("Demo.AppointmentPriceCache", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -91,7 +91,7 @@ namespace Demo.Migrations
                     b.HasIndex("AppointmentId")
                         .IsUnique();
 
-                    b.ToTable("AppointmentPrice");
+                    b.ToTable("AppointmentPrices");
                 });
 
             modelBuilder.Entity("Demo.DailyLimitDefault", b =>
@@ -128,7 +128,7 @@ namespace Demo.Migrations
                     b.ToTable("DailyLimitOverrides");
                 });
 
-            modelBuilder.Entity("Demo.PointsRollup", b =>
+            modelBuilder.Entity("Demo.PointsCache", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -171,11 +171,11 @@ namespace Demo.Migrations
                     b.Navigation("Appointment");
                 });
 
-            modelBuilder.Entity("Demo.AppointmentPrice", b =>
+            modelBuilder.Entity("Demo.AppointmentPriceCache", b =>
                 {
                     b.HasOne("Demo.Appointment", "Appointment")
                         .WithOne("Price")
-                        .HasForeignKey("Demo.AppointmentPrice", "AppointmentId")
+                        .HasForeignKey("Demo.AppointmentPriceCache", "AppointmentId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
