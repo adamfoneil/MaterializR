@@ -31,7 +31,7 @@ public class Appointment
     public bool AffectsCapacity() => AffectsCapacityFunc(this);
 
     public ICollection<AppointmentItem> Items { get; set; } = [];
-    public AppointmentPrice? Price { get; set; }
+    public AppointmentPriceCache? Price { get; set; }
 }
 
 public static class AppointmentPredicates

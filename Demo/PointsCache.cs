@@ -8,7 +8,7 @@ using System.Diagnostics;
 namespace Demo;
 
 [DebuggerDisplay("{Date} - {TransportId} - {Scheduled}/{Maximum} ({PercentFreeLive})")]
-public class PointsRollup : ICacheEntity
+public class PointsCache : ICacheEntity
 {
     public int Id { get; set; }
 
@@ -37,9 +37,9 @@ public class PointsRollup : ICacheEntity
     public bool IsStale { get; set; } = true;
 }
 
-public class PointsConfiguration : IEntityTypeConfiguration<PointsRollup>
+public class PointsConfiguration : IEntityTypeConfiguration<PointsCache>
 {
-    void IEntityTypeConfiguration<PointsRollup>.Configure(EntityTypeBuilder<PointsRollup> builder)
+    void IEntityTypeConfiguration<PointsCache>.Configure(EntityTypeBuilder<PointsCache> builder)
     {
         builder.HasIndex(e => new { e.Date, e.TransportId }).IsUnique();        
 
@@ -54,15 +54,15 @@ public class PointsConfiguration : IEntityTypeConfiguration<PointsRollup>
 
 public class PointsRollupConfiguration(
     ILogger<PointsRollupConfiguration> logger,
-    IDbContextFactory<ApplicationDbContext> dbFactory) : RollupConfiguration<ApplicationDbContext, PointsRollup, PointsRollup.Dimensions>(logger, dbFactory)
+    IDbContextFactory<ApplicationDbContext> dbFactory) : SetCache<ApplicationDbContext, PointsCache, PointsCache.Dimensions>(logger, dbFactory)
 {   
     private record DailyPointLimitDto(DateOnly Date, int Maximum);
 
-    protected override Task<PointsRollup[]> ExistingRowsAsync(ApplicationDbContext dbContext, PointsRollup.Dimensions[] dimensions)
+    protected override Task<PointsCache[]> ExistingRowsAsync(ApplicationDbContext dbContext, PointsCache.Dimensions[] dimensions)
     {
         if (dimensions.Length == 0)
         {
-            return Task.FromResult(Array.Empty<PointsRollup>());
+            return Task.FromResult(Array.Empty<PointsCache>());
         }
 
         var uniqueDimensions = dimensions.Distinct().ToArray();
@@ -114,7 +114,7 @@ public class PointsRollupConfiguration(
         return [.. results];
     }
 
-    protected override async Task<PointsRollup[]> QueryLiveAsync(ApplicationDbContext dbContext, PointsRollup.Dimensions[] dimensions)
+    protected override async Task<PointsCache[]> QueryLiveAsync(ApplicationDbContext dbContext, PointsCache.Dimensions[] dimensions)
     {
         if (!dimensions.Any()) return [];
 
@@ -128,7 +128,7 @@ public class PointsRollupConfiguration(
     /// <summary>
     /// this is really for test purposes to make the low-level query results observable
     /// </summary>
-    public static async Task<PointsRollup[]> QueryLiveImplementationAsync(ApplicationDbContext db, DateOnly from, DateOnly to)
+    public static async Task<PointsCache[]> QueryLiveImplementationAsync(ApplicationDbContext db, DateOnly from, DateOnly to)
     {
         var dailyLimits = await DailyPointLimitsAsync(db, from, to);
         var dailyLimitLookup = dailyLimits.ToDictionary(l => l.Date, l => l.Maximum);
@@ -141,7 +141,7 @@ public class PointsRollupConfiguration(
             .GroupBy(a => (a.Date, TransportId: a.TransportId ?? 0))
             .ToDictionary(g => g.Key, g => g.Sum(a => a.Points));
 
-        return [.. scheduledLookup.Select(d => new PointsRollup
+        return [.. scheduledLookup.Select(d => new PointsCache
         {
             Date = d.Key.Date,
             TransportId = d.Key.TransportId,
@@ -150,19 +150,19 @@ public class PointsRollupConfiguration(
         })];
     }
 
-    protected override DbSet<PointsRollup> RollupDbSet(ApplicationDbContext db) => db.PointsRollup;
+    protected override DbSet<PointsCache> RollupDbSet(ApplicationDbContext db) => db.PointsRollup;
 
-    protected override void UpdateFacts(PointsRollup existingRow, PointsRollup incomingRow)
+    protected override void UpdateFacts(PointsCache existingRow, PointsCache incomingRow)
     {
         existingRow.Maximum = incomingRow.Maximum;
         existingRow.Scheduled = incomingRow.Scheduled;
     }
 
-    protected override PointsRollup FromDimensions(PointsRollup.Dimensions dimensions) => new()
+    protected override PointsCache FromDimensions(PointsCache.Dimensions dimensions) => new()
     {
         Date = dimensions.Date,
         TransportId = dimensions.TransportId
     };
 
-    protected override PointsRollup.Dimensions ToDimensions(PointsRollup entity) => new(entity.Date, entity.TransportId); 
+    protected override PointsCache.Dimensions ToDimensions(PointsCache entity) => new(entity.Date, entity.TransportId); 
 }

@@ -6,14 +6,14 @@ namespace MaterializR.Core;
 
 public record DimensionChangesResult(int Inserted, int Updated);
 
-public abstract class RollupConfiguration<TDbContext, TCacheEntity, TCacheDimensions>(
-    ILogger<RollupConfiguration<TDbContext, TCacheEntity, TCacheDimensions>> logger,
+public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions>(
+    ILogger<SetCache<TDbContext, TCacheEntity, TCacheDimensions>> logger,
     IDbContextFactory<TDbContext> dbFactory) 
     where TDbContext : DbContext
     where TCacheEntity : class, ICacheEntity
     where TCacheDimensions : notnull
 {
-    protected readonly ILogger<RollupConfiguration<TDbContext, TCacheEntity, TCacheDimensions>> Logger = logger;
+    protected readonly ILogger<SetCache<TDbContext, TCacheEntity, TCacheDimensions>> Logger = logger;
 
     protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
 

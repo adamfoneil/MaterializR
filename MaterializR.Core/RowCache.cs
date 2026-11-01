@@ -5,13 +5,13 @@ using System.Linq.Expressions;
 
 namespace MaterializR.Core;
 
-public abstract class RolldownConfiguration<TDbContext, TCacheEntity, TKey>(
-    ILogger<RolldownConfiguration<TDbContext, TCacheEntity, TKey>> logger,
+public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
+    ILogger<RowCache<TDbContext, TCacheEntity, TKey>> logger,
     IDbContextFactory<TDbContext> dbFactory)
     where TDbContext : DbContext
     where TCacheEntity : class, ICacheEntity, new()
 {
-    protected readonly ILogger<RolldownConfiguration<TDbContext, TCacheEntity, TKey>> Logger = logger;
+    protected readonly ILogger<RowCache<TDbContext, TCacheEntity, TKey>> Logger = logger;
 
     protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
 
