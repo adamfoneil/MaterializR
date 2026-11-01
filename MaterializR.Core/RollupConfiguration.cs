@@ -1,8 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.Extensions.Logging;
-using System.Diagnostics;
-using System.Runtime.CompilerServices;
 
 namespace MaterializR.Core;
 
@@ -78,11 +76,11 @@ public abstract class RollupConfiguration<TDbContext, TCacheEntity, TCacheDimens
     /// <summary>
     /// flag dimensions as modified, inserting where they don't exist
     /// </summary>
-    public async Task<DimensionChangesResult> TrackDimensionChangesAsync(TDbContext dbContext, (bool Inserted, TCacheDimensions Dimensions)[] changes)
+    public async Task<DimensionChangesResult> MarkStaleDimensionsAsync(TDbContext dbContext, (bool Inserted, TCacheDimensions Dimensions)[] changes)
     {
         if (!changes.Any()) return new(0, 0);
 
-        return await TrackDuration(async () =>
+        return await Util.TrackDuration(Logger, async () =>
         {            
             foreach (var (_, dim) in changes.Where(d => d.Inserted).Distinct())
             {
@@ -142,7 +140,7 @@ public abstract class RollupConfiguration<TDbContext, TCacheEntity, TCacheDimens
         using var db = DbFactory.CreateDbContext();
         using var txn = db.Database.BeginTransaction();
 
-        return await TrackDuration(async () =>
+        return await Util.TrackDuration(Logger, async () =>
         {
             try
             {
@@ -165,34 +163,13 @@ public abstract class RollupConfiguration<TDbContext, TCacheEntity, TCacheDimens
         });        
     }
 
-    public (bool Inserted, TCacheDimensions Dimensions)[] GetDimensionChanges<TEntity>(TDbContext dbContext, Func<TEntity, TCacheDimensions> selector) where TEntity : class
+    public (bool Inserted, TCacheDimensions Dimensions)[] GetDimensionChanges<TEntity>(ChangeTracker changeTracker, Func<TEntity, TCacheDimensions> selector) where TEntity : class
     {
         List<(bool Inserted, TCacheDimensions Dimensions)> changes = [];
-        changes.AddRange(Added(dbContext.ChangeTracker, selector));
-        changes.AddRange(Modified(dbContext.ChangeTracker, selector));
-        changes.AddRange(ModifiedOriginal(dbContext.ChangeTracker, selector));
-        changes.AddRange(Deleted(dbContext.ChangeTracker, selector));
+        changes.AddRange(Added(changeTracker, selector));
+        changes.AddRange(Modified(changeTracker, selector));
+        changes.AddRange(ModifiedOriginal(changeTracker, selector));
+        changes.AddRange(Deleted(changeTracker, selector));
         return [..changes];
-    }
-
-    /// <summary>
-    /// use in public methods only
-    /// </summary>
-    private async Task<T> TrackDuration<T>(Func<Task<T>> action, [CallerMemberName]string? methodName = null)
-    {
-        var stopwatch = Stopwatch.StartNew();
-
-        try
-        {
-            return await action();
-        }        
-        finally
-        {
-            stopwatch.Stop();
-            if (Logger.IsEnabled(LogLevel.Information))
-            {
-                Logger.LogInformation("Rollup operation {MethodName} completed in {ElapsedMilliseconds} ms", methodName, stopwatch.ElapsedMilliseconds);
-            }
-        }        
     }
 }

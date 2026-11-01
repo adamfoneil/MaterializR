@@ -46,6 +46,54 @@ namespace Demo.Migrations
                     b.ToTable("Appointments");
                 });
 
+            modelBuilder.Entity("Demo.AppointmentItem", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("AppointmentId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ItemId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("UnitPrice")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AppointmentId");
+
+                    b.ToTable("AppointmentItem");
+                });
+
+            modelBuilder.Entity("Demo.AppointmentPrice", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("AppointmentId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsStale")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("TotalPrice")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AppointmentId")
+                        .IsUnique();
+
+                    b.ToTable("AppointmentPrice");
+                });
+
             modelBuilder.Entity("Demo.DailyLimitDefault", b =>
                 {
                     b.Property<int>("Id")
@@ -110,6 +158,35 @@ namespace Demo.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("PointsRollup");
+                });
+
+            modelBuilder.Entity("Demo.AppointmentItem", b =>
+                {
+                    b.HasOne("Demo.Appointment", "Appointment")
+                        .WithMany("Items")
+                        .HasForeignKey("AppointmentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Appointment");
+                });
+
+            modelBuilder.Entity("Demo.AppointmentPrice", b =>
+                {
+                    b.HasOne("Demo.Appointment", "Appointment")
+                        .WithOne("Price")
+                        .HasForeignKey("Demo.AppointmentPrice", "AppointmentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Appointment");
+                });
+
+            modelBuilder.Entity("Demo.Appointment", b =>
+                {
+                    b.Navigation("Items");
+
+                    b.Navigation("Price");
                 });
 #pragma warning restore 612, 618
         }

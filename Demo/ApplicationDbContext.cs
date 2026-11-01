@@ -6,9 +6,11 @@ namespace Demo;
 
 public class ApplicationDbContext(
     DbContextOptions<ApplicationDbContext> options,
-    PointsRollupConfiguration pointsRollup) : DbContext(options)
+    PointsRollupConfiguration pointsRollup,
+    AppointmentPriceRolldownConfiguration rolldownConfig) : DbContext(options)
 {
     private readonly PointsRollupConfiguration _pointsRollup = pointsRollup;
+    private readonly AppointmentPriceRolldownConfiguration _priceRolldown = rolldownConfig;
 
     /// <summary>
     /// rollup/view entity
@@ -17,14 +19,24 @@ public class ApplicationDbContext(
     public DbSet<Appointment> Appointments { get; set; }
     public DbSet<DailyLimitDefault> DailyLimitDefaults { get; set; }
     public DbSet<DailyLimitOverride> DailyLimitOverrides { get; set; }
+    public DbSet<AppointmentItem> AppointmentItems { get; set; }
+    public DbSet<AppointmentPrice> AppointmentPrices { get; set; }
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        var apptChanges = _pointsRollup.GetDimensionChanges<Appointment>(this, a => new PointsRollup.Dimensions(a.Date, a.TransportId ?? 0));
+        var apptChanges = _pointsRollup.GetDimensionChanges<Appointment>(this.ChangeTracker, a => new PointsRollup.Dimensions(a.Date, a.TransportId ?? 0));
+
+        var priceChanges = _priceRolldown.GetAffectedKeys(this.ChangeTracker, e => e switch
+        {
+            Appointment a => a.Id,
+            AppointmentItem ai => ai.AppointmentId,
+            _ => 0
+        });
 
         var result = await base.SaveChangesAsync(cancellationToken);
 
-        await _pointsRollup.TrackDimensionChangesAsync(this, apptChanges);
+        await _pointsRollup.MarkStaleDimensionsAsync(this, apptChanges);
+        await _priceRolldown.MarkStaleKeysAsync(this, priceChanges);
 
         return result;
     }
@@ -53,8 +65,11 @@ public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<Applicati
     {
         var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
         Configure(optionsBuilder);
-        var logger = new LoggerFactory().CreateLogger<PointsRollupConfiguration>();
-        return new ApplicationDbContext(optionsBuilder.Options, new PointsRollupConfiguration(logger, this));
+        var rollupLogger = new LoggerFactory().CreateLogger<PointsRollupConfiguration>();
+        var rolldownLogger = new LoggerFactory().CreateLogger<AppointmentPriceRolldownConfiguration>();        
+        return new ApplicationDbContext(optionsBuilder.Options, 
+            new PointsRollupConfiguration(rollupLogger, this), 
+            new AppointmentPriceRolldownConfiguration(rolldownLogger, this));
     }
 
     public ApplicationDbContext CreateDbContext(string[] args) => CreateDbContext();
