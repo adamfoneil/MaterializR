@@ -34,7 +34,7 @@ public class PointsRollup : ICacheEntity
     [NotMapped]
     public decimal PercentFreeLive => Maximum > 0 ? (decimal)(Maximum - Scheduled) / Maximum : 0m;
 
-    public bool IsModified { get; set; } = true;
+    public bool IsStale { get; set; } = true;
 }
 
 public class PointsConfiguration : IEntityTypeConfiguration<PointsRollup>

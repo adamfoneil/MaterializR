@@ -104,7 +104,7 @@ public abstract class RollupConfiguration<TDbContext, TCacheEntity, TCacheDimens
                 {
                     if (modifiedLookup.Contains(ToDimensions(entity)))
                     {
-                        entity.IsModified = true;
+                        entity.IsStale = true;
                     }
                 }
             }
@@ -146,12 +146,12 @@ public abstract class RollupConfiguration<TDbContext, TCacheEntity, TCacheDimens
         {
             try
             {
-                var dimensions = await RollupDbSet(db).AsNoTracking().Where(row => row.IsModified).ToArrayAsync();
+                var dimensions = await RollupDbSet(db).AsNoTracking().Where(row => row.IsStale).ToArrayAsync();
                 if (!dimensions.Any()) return 0;
                 var dimensionKeys = dimensions.Select(row => ToDimensions(row)).ToArray();
                 var liveData = await QueryLiveAsync(db, dimensionKeys);
                 await MergeAsync(db, liveData);
-                int result = await RollupDbSet(db).Where(row => row.IsModified).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsModified, false));
+                int result = await RollupDbSet(db).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false));
                 await txn.CommitAsync();
 
                 return result;

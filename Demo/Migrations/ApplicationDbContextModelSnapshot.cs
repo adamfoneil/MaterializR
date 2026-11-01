@@ -92,7 +92,7 @@ namespace Demo.Migrations
                     b.Property<DateOnly>("Date")
                         .HasColumnType("TEXT");
 
-                    b.Property<bool>("IsModified")
+                    b.Property<bool>("IsStale")
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("Maximum")

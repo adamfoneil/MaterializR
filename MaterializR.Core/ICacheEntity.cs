@@ -8,5 +8,5 @@ public interface ICacheEntity
     /// <summary>
     /// indicates that underlying/related source data has changed and this row needs to be refreshed
     /// </summary>
-    bool IsModified { get; set; }    
+    bool IsStale { get; set; }
 }

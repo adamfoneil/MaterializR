@@ -46,6 +46,7 @@ public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<Applicati
     public static void Configure(DbContextOptionsBuilder optionsBuilder)
     {
         optionsBuilder.UseSqlite(ConnectionString);
+        Console.WriteLine($"Using SQLite database at: {ConnectionString}");
     }
 
     public ApplicationDbContext CreateDbContext()
