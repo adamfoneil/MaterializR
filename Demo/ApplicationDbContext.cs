@@ -6,16 +6,16 @@ namespace Demo;
 
 public class ApplicationDbContext(
     DbContextOptions<ApplicationDbContext> options,
-    PointsRollupConfiguration pointsRollup,
-    AppointmentPriceAggregate rolldownConfig) : DbContext(options)
+    PointsCacheConfiguration pointsRollup,
+    AppointmentPriceCacheConfiguration rolldownConfig) : DbContext(options)
 {
-    private readonly PointsRollupConfiguration _pointsRollup = pointsRollup;
-    private readonly AppointmentPriceAggregate _priceRolldown = rolldownConfig;
+    private readonly PointsCacheConfiguration _pointsRollup = pointsRollup;
+    private readonly AppointmentPriceCacheConfiguration _priceRolldown = rolldownConfig;
 
     /// <summary>
     /// rollup/view entity
     /// </summary>
-    public DbSet<PointsCache> PointsRollup { get; set; }
+    public DbSet<PointsCache> PointsCache { get; set; }
     public DbSet<Appointment> Appointments { get; set; }
     public DbSet<DailyLimitDefault> DailyLimitDefaults { get; set; }
     public DbSet<DailyLimitOverride> DailyLimitOverrides { get; set; }
@@ -65,11 +65,11 @@ public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<Applicati
     {
         var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
         Configure(optionsBuilder);
-        var rollupLogger = new LoggerFactory().CreateLogger<PointsRollupConfiguration>();
-        var rolldownLogger = new LoggerFactory().CreateLogger<AppointmentPriceAggregate>();        
+        var rollupLogger = new LoggerFactory().CreateLogger<PointsCacheConfiguration>();
+        var rolldownLogger = new LoggerFactory().CreateLogger<AppointmentPriceCacheConfiguration>();        
         return new ApplicationDbContext(optionsBuilder.Options, 
-            new PointsRollupConfiguration(rollupLogger, this), 
-            new AppointmentPriceAggregate(rolldownLogger, this));
+            new PointsCacheConfiguration(rollupLogger, this), 
+            new AppointmentPriceCacheConfiguration(rolldownLogger, this));
     }
 
     public ApplicationDbContext CreateDbContext(string[] args) => CreateDbContext();

@@ -13,7 +13,7 @@ public sealed class Core
         {
             var services = new ServiceCollection();
             services.AddDbContextFactory<ApplicationDbContext>(ApplicationDbContextFactory.Configure, ServiceLifetime.Singleton);
-            services.AddSingleton<PointsRollupConfiguration>();
+            services.AddSingleton<PointsCacheConfiguration>();
             services.AddLogging();
             return services.BuildServiceProvider();
         }        
@@ -26,7 +26,7 @@ public sealed class Core
         db.Database.EnsureCreated();
 
         await db.DailyLimitDefaults.ExecuteDeleteAsync();
-        await db.PointsRollup.ExecuteDeleteAsync();
+        await db.PointsCache.ExecuteDeleteAsync();
         await db.Appointments.ExecuteDeleteAsync();
 
         await SetScheduleLimitsAsync(db);
@@ -44,13 +44,13 @@ public sealed class Core
 
         // assert that we have dimensions for each day in the range
 
-        var rollupData = await PointsRollupConfiguration.QueryLiveImplementationAsync(db, from, to);
+        var rollupData = await PointsCacheConfiguration.QueryLiveImplementationAsync(db, from, to);
 
-        var rollup = Services.GetRequiredService<PointsRollupConfiguration>();
+        var rollup = Services.GetRequiredService<PointsCacheConfiguration>();
         // all inserted
         await rollup.UpdateAsync();
 
-        var rollupResults = await db.PointsRollup.AsNoTracking().ToArrayAsync();
+        var rollupResults = await db.PointsCache.AsNoTracking().ToArrayAsync();
 
         // assert that the rollup results match the live query results
     }

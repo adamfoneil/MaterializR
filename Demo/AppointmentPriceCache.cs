@@ -27,8 +27,8 @@ public class AppointmentPriceConfiguration : IEntityTypeConfiguration<Appointmen
     }
 }
 
-public class AppointmentPriceAggregate(
-    ILogger<AppointmentPriceAggregate> logger, IDbContextFactory<ApplicationDbContext> dbFactory) :
+public class AppointmentPriceCacheConfiguration(
+    ILogger<AppointmentPriceCacheConfiguration> logger, IDbContextFactory<ApplicationDbContext> dbFactory) :
     RowCache<ApplicationDbContext, AppointmentPriceCache, int>(logger, dbFactory)
 {
     protected override Expression<Func<AppointmentPriceCache, int>> KeySelector => ap => ap.AppointmentId;

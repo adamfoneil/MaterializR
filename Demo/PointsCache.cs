@@ -52,8 +52,8 @@ public class PointsConfiguration : IEntityTypeConfiguration<PointsCache>
     }
 }
 
-public class PointsRollupConfiguration(
-    ILogger<PointsRollupConfiguration> logger,
+public class PointsCacheConfiguration(
+    ILogger<PointsCacheConfiguration> logger,
     IDbContextFactory<ApplicationDbContext> dbFactory) : SetCache<ApplicationDbContext, PointsCache, PointsCache.Dimensions>(logger, dbFactory)
 {   
     private record DailyPointLimitDto(DateOnly Date, int Maximum);
@@ -69,7 +69,7 @@ public class PointsRollupConfiguration(
         var dates = uniqueDimensions.Select(d => d.Date).Distinct().ToArray();
         var transportIds = uniqueDimensions.Select(d => d.TransportId).Distinct().ToArray();
 
-        return dbContext.PointsRollup
+        return dbContext.PointsCache
             .Where(row => dates.Contains(row.Date) && transportIds.Contains(row.TransportId))
             .ToArrayAsync();
     }
@@ -150,7 +150,7 @@ public class PointsRollupConfiguration(
         })];
     }
 
-    protected override DbSet<PointsCache> RollupDbSet(ApplicationDbContext db) => db.PointsRollup;
+    protected override DbSet<PointsCache> RollupDbSet(ApplicationDbContext db) => db.PointsCache;
 
     protected override void UpdateFacts(PointsCache existingRow, PointsCache incomingRow)
     {

@@ -9,7 +9,7 @@ public class Program
     {
         var services = new ServiceCollection();
         services.AddDbContextFactory<ApplicationDbContext>(ApplicationDbContextFactory.Configure, ServiceLifetime.Singleton);
-        services.AddSingleton<PointsRollupConfiguration>();
+        services.AddSingleton<PointsCacheConfiguration>();
         var sp = services.BuildServiceProvider();
 
         using var scope = sp.CreateScope();
@@ -32,10 +32,10 @@ public class Program
         await db.SaveChangesAsync();
         */
 
-        var rollup = sp.GetRequiredService<PointsRollupConfiguration>();
+        var rollup = sp.GetRequiredService<PointsCacheConfiguration>();
         await rollup.UpdateAsync();
 
-        var dims = await db.PointsRollup.ToArrayAsync();
+        var dims = await db.PointsCache.ToArrayAsync();
         foreach (var d in dims)
         {
             Console.WriteLine($"Date: {d.Date}, TransportId: {d.TransportId}, Maximum: {d.Maximum}, Scheduled: {d.Scheduled}, Available: {d.Available}, PercentFree: {d.PercentFree}");
