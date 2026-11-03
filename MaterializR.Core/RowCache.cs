@@ -74,12 +74,48 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
 
         return await Util.TrackDuration(Logger, async () =>
         {
-            RowCacheDbSet(dbContext).AddRange(keys.Where(k => k.Inserted).Select(k => FromKey(k.Key)));
+            var insertedKeys = keys
+                .Where(k => k.Inserted)
+                .Select(k => k.Key)
+                .Distinct()
+                .ToArray();
+
+            if (insertedKeys.Length > 0)
+            {
+                RowCacheDbSet(dbContext).AddRange(insertedKeys.Select(key =>
+                {
+                    var row = FromKey(key);
+                    row.IsStale = true;
+                    return row;
+                }));
+            }
+
             int inserted = await dbContext.SaveChangesAsync();
 
-            int updated = await RowCacheDbSet(dbContext)
-                .Where(row => keys.Any(k => !k.Inserted))
-                .ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, true));
+            var updatedKeys = keys
+                .Where(k => !k.Inserted)
+                .Select(k => k.Key)
+                .Distinct()
+                .ToArray();
+
+            int updated = 0;
+            if (updatedKeys.Length > 0)
+            {
+                var updatedSet = updatedKeys.ToHashSet();
+                var keySelector = KeySelector.Compile();
+
+                var rows = await RowCacheDbSet(dbContext).ToArrayAsync();
+                foreach (var row in rows)
+                {
+                    if (updatedSet.Contains(keySelector(row)))
+                    {
+                        row.IsStale = true;
+                        dbContext.Entry(row).Property(nameof(ICacheEntity.IsStale)).IsModified = true;
+                    }
+                }
+
+                updated = await dbContext.SaveChangesAsync();
+            }
 
             return inserted + updated;
         });

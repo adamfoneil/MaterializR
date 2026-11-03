@@ -45,9 +45,8 @@ public sealed class RowCacheTests
         db.Appointments.Add(appointment);
         await db.SaveChangesAsync();
 
-        await MarkStaleAppointmentsAsync(db, appointment.Id);
-
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        await cache.MarkStaleKeysAsync(db, [(true, appointment.Id)]);
         await cache.UpdateAsync();
 
         await AssertCacheMatchesLiveAsync(db);
@@ -76,9 +75,8 @@ public sealed class RowCacheTests
         db.Appointments.Add(appointment);
         await db.SaveChangesAsync();
 
-        await MarkStaleAppointmentsAsync(db, appointment.Id);
-
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        await cache.MarkStaleKeysAsync(db, [(true, appointment.Id)]);
         await cache.UpdateAsync();
 
         await db.AppointmentItems
@@ -121,16 +119,15 @@ public sealed class RowCacheTests
         db.Appointments.Add(appointment);
         await db.SaveChangesAsync();
 
-        await MarkStaleAppointmentsAsync(db, appointment.Id);
-
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        await cache.MarkStaleKeysAsync(db, [(true, appointment.Id)]);
         await cache.UpdateAsync();
 
         await db.AppointmentItems
             .Where(i => i.AppointmentId == appointment.Id && i.ItemId == 12)
             .ExecuteDeleteAsync();
 
-        await MarkStaleAppointmentsAsync(db, appointment.Id);
+        await cache.MarkStaleKeysAsync(db, [(false, appointment.Id)]);
 
         await cache.UpdateAsync();
 
@@ -187,38 +184,4 @@ public sealed class RowCacheTests
         }
     }
 
-    private static async Task MarkStaleAppointmentsAsync(ApplicationDbContext db, params int[] appointmentIds)
-    {
-        if (appointmentIds.Length == 0)
-        {
-            return;
-        }
-
-        var ids = appointmentIds.Distinct().ToArray();
-
-        var existingIds = await db.AppointmentPrices
-            .Where(p => ids.Contains(p.AppointmentId))
-            .Select(p => p.AppointmentId)
-            .ToArrayAsync();
-
-        var missingIds = ids.Except(existingIds).ToArray();
-        if (missingIds.Length > 0)
-        {
-            db.AppointmentPrices.AddRange(missingIds.Select(id => new AppointmentPriceCache
-            {
-                AppointmentId = id,
-                IsStale = true
-            }));
-
-            await db.SaveChangesAsync();
-        }
-
-        if (existingIds.Length > 0)
-        {
-            await db.AppointmentPrices
-                .Where(p => existingIds.Contains(p.AppointmentId))
-                .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(p => p.IsStale, true));
-        }
-    }
 }
