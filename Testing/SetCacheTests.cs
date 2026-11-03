@@ -163,7 +163,7 @@ public sealed class SetCacheTests
             .ThenBy(r => r.TransportId)
             .ToArrayAsync();
 
-        Assert.AreEqual(expected.Length, actual.Length);
+        Assert.HasCount(expected.Length, actual);
 
         for (var i = 0; i < expected.Length; i++)
         {
