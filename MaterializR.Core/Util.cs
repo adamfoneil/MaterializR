@@ -25,7 +25,7 @@ internal static class Util
             stopwatch.Stop();
             if (logger.IsEnabled(LogLevel.Information))
             {
-                logger.LogInformation("Operation {MethodName} {Status} in {ElapsedMilliseconds} ms", methodName, status, stopwatch.ElapsedMilliseconds);
+                logger.LogInformation("{MethodName} {Status} in {ElapsedMilliseconds} ms", methodName, status, stopwatch.ElapsedMilliseconds);
             }
         }
     }

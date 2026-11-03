@@ -8,23 +8,10 @@ namespace Testing;
 [DoNotParallelize]
 public sealed class SetCacheTests
 {
-    private static IServiceProvider Services
-    {
-        get
-        {
-            var services = new ServiceCollection();
-            services.AddDbContextFactory<ApplicationDbContext>(ApplicationDbContextFactory.Configure, ServiceLifetime.Singleton);
-            services.AddSingleton<PointsCacheConfiguration>();
-            services.AddSingleton<AppointmentPriceCacheConfiguration>();
-            services.AddLogging();
-            return services.BuildServiceProvider();
-        }
-    }
-
     [TestMethod]
     public async Task InsertedRows_PopulatePointsCache()
     {
-        using var scope = Services.CreateScope();
+        using var scope = TestServiceProvider.Services.CreateScope();
         await using var db = await InitDbAsync(scope);
 
         var baseDate = DateOnly.FromDateTime(DateTime.Today);
@@ -46,7 +33,7 @@ public sealed class SetCacheTests
     [TestMethod]
     public async Task UpdatedRows_RefreshExistingDimension()
     {
-        using var scope = Services.CreateScope();
+        using var scope = TestServiceProvider.Services.CreateScope();
         await using var db = await InitDbAsync(scope);
 
         var baseDate = DateOnly.FromDateTime(DateTime.Today);
@@ -83,7 +70,7 @@ public sealed class SetCacheTests
     [TestMethod]
     public async Task DeletedRows_DecreaseScheduledPoints()
     {
-        using var scope = Services.CreateScope();
+        using var scope = TestServiceProvider.Services.CreateScope();
         await using var db = await InitDbAsync(scope);
 
         var baseDate = DateOnly.FromDateTime(DateTime.Today);

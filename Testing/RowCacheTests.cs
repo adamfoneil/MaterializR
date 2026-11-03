@@ -8,23 +8,10 @@ namespace Testing;
 [DoNotParallelize]
 public sealed class RowCacheTests
 {
-    private static IServiceProvider Services
-    {
-        get
-        {
-            var services = new ServiceCollection();
-            services.AddDbContextFactory<ApplicationDbContext>(ApplicationDbContextFactory.Configure, ServiceLifetime.Singleton);
-            services.AddSingleton<PointsCacheConfiguration>();
-            services.AddSingleton<AppointmentPriceCacheConfiguration>();
-            services.AddLogging();
-            return services.BuildServiceProvider();
-        }
-    }
-
     [TestMethod]
     public async Task InsertedRows_PopulateAppointmentPriceCache()
     {
-        using var scope = Services.CreateScope();
+        using var scope = TestServiceProvider.Services.CreateScope();
         await using var db = await InitDbAsync(scope);
 
         var appointment = new Appointment
@@ -55,7 +42,7 @@ public sealed class RowCacheTests
     [TestMethod]
     public async Task UpdatedRows_RefreshExistingAppointmentPrice()
     {
-        using var scope = Services.CreateScope();
+        using var scope = TestServiceProvider.Services.CreateScope();
         await using var db = await InitDbAsync(scope);
 
         var appointment = new Appointment
@@ -98,7 +85,7 @@ public sealed class RowCacheTests
     [TestMethod]
     public async Task DeletedRows_RefreshExistingAppointmentPrice()
     {
-        using var scope = Services.CreateScope();
+        using var scope = TestServiceProvider.Services.CreateScope();
         await using var db = await InitDbAsync(scope);
 
         var appointment = new Appointment
