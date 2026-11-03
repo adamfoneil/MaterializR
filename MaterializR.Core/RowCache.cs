@@ -10,12 +10,13 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
     IDbContextFactory<TDbContext> dbFactory)
     where TDbContext : DbContext
     where TCacheEntity : class, ICacheEntity, new()
+    where TKey : notnull
 {
     protected readonly ILogger<RowCache<TDbContext, TCacheEntity, TKey>> Logger = logger;
 
     protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
 
-    protected abstract DbSet<TCacheEntity> RolldownDbSet(TDbContext db);
+    protected abstract DbSet<TCacheEntity> RowCacheDbSet(TDbContext db);
 
     protected abstract Task<TCacheEntity[]> QueryLiveAsync(TDbContext dbContext, TKey[] keys);
 
@@ -32,7 +33,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
             .GroupBy(keySelector)
             .ToDictionary(g => g.Key, g => g.Last());
 
-        var staleRows = await RolldownDbSet(dbContext)
+        var staleRows = await RowCacheDbSet(dbContext)
             .Where(row => row.IsStale)
             .ToArrayAsync();
 
@@ -48,13 +49,13 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
             }
             else
             {
-                RolldownDbSet(dbContext).Remove(staleRow);
+                RowCacheDbSet(dbContext).Remove(staleRow);
             }
         }
 
         if (incomingByKey.Count > 0)
         {
-            RolldownDbSet(dbContext).AddRange(incomingByKey.Values);
+            RowCacheDbSet(dbContext).AddRange(incomingByKey.Values);
         }
 
         await dbContext.SaveChangesAsync();
@@ -73,10 +74,10 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
 
         return await Util.TrackDuration(Logger, async () =>
         {
-            RolldownDbSet(dbContext).AddRange(keys.Where(k => k.Inserted).Select(k => FromKey(k.Key)));
+            RowCacheDbSet(dbContext).AddRange(keys.Where(k => k.Inserted).Select(k => FromKey(k.Key)));
             int inserted = await dbContext.SaveChangesAsync();
 
-            int updated = await RolldownDbSet(dbContext)
+            int updated = await RowCacheDbSet(dbContext)
                 .Where(row => keys.Any(k => !k.Inserted))
                 .ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, true));
 
@@ -93,7 +94,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
         {
             try
             {
-                var keys = await RolldownDbSet(db)
+                var keys = await RowCacheDbSet(db)
                     .AsNoTracking()
                     .Where(e => e.IsStale)
                     .Select(KeySelector)
@@ -102,7 +103,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
                 var liveData = await QueryLiveAsync(db, keys);
                 await MergeAsync(db, liveData);
 
-                int result = await RolldownDbSet(db).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false));
+                int result = await RowCacheDbSet(db).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false));
                 await txn.CommitAsync();
 
                 return result;
