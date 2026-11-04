@@ -12,13 +12,13 @@ When you implement these abstract classes, inject them in your DbContext, then o
 
 ## Demo walkthrough
 
-The [Demo](Demo) project shows how cache rows are marked stale inside `SaveChangesAsync`, then refreshed in a batch with `UpdateAsync`.
+The [Demo](Demo) project shows how cache rows are marked stale inside `SaveChangesAsync`, then refreshed in a batch with `UpdateAsync` using a mock scheduling system. Relevant entities: [Appointment](Demo/Appointment.cs), [AppointmentItem](Demo/AppointmentItem.cs).
 
 ### 1. SaveChanges marks cache rows as stale
 
 In [ApplicationDbContext](Demo/ApplicationDbContext.cs):
-- Appointment changes are mapped to `PointsCache.Dimensions` and passed to `PointsCacheConfiguration.MarkStaleDimensionsAsync`.
-- Appointment and AppointmentItem changes are mapped to appointment IDs and passed to `AppointmentPriceCacheConfiguration.MarkStaleKeysAsync`.
+- For SetCache: Appointment changes are mapped to `PointsCache.Dimensions` and passed to `PointsCacheConfiguration.MarkStaleDimensionsAsync`.
+- For RowCache: Appointment and AppointmentItem changes are mapped to appointment IDs and passed to `AppointmentPriceCacheConfiguration.MarkStaleKeysAsync`.
 
 This keeps writes fast: no heavy recompute during the transaction that inserts/updates appointments.
 
