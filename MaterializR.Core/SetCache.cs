@@ -81,7 +81,13 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions>(
         if (!changes.Any()) return new(0, 0);
 
         return await Util.TrackDuration(Logger, async () =>
-        {            
+        {
+            if (Logger.IsEnabled(LogLevel.Information))
+            {
+                var logDetail = string.Join(", ", changes.GroupBy(c => c.Inserted).Select(g => $"{(g.Key ? "Inserted" : "Updated")}: {string.Join(", ", g.Select(c => c.Dimensions))}"));
+                Logger.LogInformation("Marking stale dimensions: {dimensions}", logDetail);
+            }
+
             foreach (var (_, dim) in changes.Where(d => d.Inserted).Distinct())
             {
                 RollupDbSet(dbContext).Add(FromDimensions(dim));

@@ -74,6 +74,11 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
 
         return await Util.TrackDuration(Logger, async () =>
         {
+            if (Logger.IsEnabled(LogLevel.Information))
+            {
+                Logger.LogInformation("Marking stale keys: {keys}", string.Join(", ", keys.Select(k => k.Key)));
+            }            
+
             var insertedKeys = keys
                 .Where(k => k.Inserted)
                 .Select(k => k.Key)
