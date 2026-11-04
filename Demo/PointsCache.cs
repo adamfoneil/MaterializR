@@ -150,7 +150,7 @@ public class PointsCacheConfiguration(
         })];
     }
 
-    protected override DbSet<PointsCache> RollupDbSet(ApplicationDbContext db) => db.PointsCache;
+    protected override DbSet<PointsCache> CacheDbSet(ApplicationDbContext db) => db.PointsCache;
 
     protected override void UpdateFacts(PointsCache existingRow, PointsCache incomingRow)
     {

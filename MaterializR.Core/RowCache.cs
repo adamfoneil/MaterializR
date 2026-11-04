@@ -16,7 +16,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
 
     protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
 
-    protected abstract DbSet<TCacheEntity> RowCacheDbSet(TDbContext db);
+    protected abstract DbSet<TCacheEntity> CacheDbSet(TDbContext db);
 
     protected abstract Task<TCacheEntity[]> QueryLiveAsync(TDbContext dbContext, TKey[] keys);
 
@@ -33,7 +33,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
             .GroupBy(keySelector)
             .ToDictionary(g => g.Key, g => g.Last());
 
-        var staleRows = await RowCacheDbSet(dbContext)
+        var staleRows = await CacheDbSet(dbContext)
             .Where(row => row.IsStale)
             .ToArrayAsync();
 
@@ -49,13 +49,13 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
             }
             else
             {
-                RowCacheDbSet(dbContext).Remove(staleRow);
+                CacheDbSet(dbContext).Remove(staleRow);
             }
         }
 
         if (incomingByKey.Count > 0)
         {
-            RowCacheDbSet(dbContext).AddRange(incomingByKey.Values);
+            CacheDbSet(dbContext).AddRange(incomingByKey.Values);
         }
 
         await dbContext.SaveChangesAsync();
@@ -87,7 +87,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
 
             if (insertedKeys.Length > 0)
             {
-                RowCacheDbSet(dbContext).AddRange(insertedKeys.Select(key =>
+                CacheDbSet(dbContext).AddRange(insertedKeys.Select(key =>
                 {
                     var row = FromKey(key);
                     row.IsStale = true;
@@ -109,7 +109,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
                 var updatedSet = updatedKeys.ToHashSet();
                 var keySelector = KeySelector.Compile();
 
-                var rows = await RowCacheDbSet(dbContext).ToArrayAsync();
+                var rows = await CacheDbSet(dbContext).ToArrayAsync();
                 foreach (var row in rows)
                 {
                     if (updatedSet.Contains(keySelector(row)))
@@ -135,7 +135,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
         {
             try
             {
-                var keys = await RowCacheDbSet(db)
+                var keys = await CacheDbSet(db)
                     .AsNoTracking()
                     .Where(e => e.IsStale)
                     .Select(KeySelector)
@@ -144,7 +144,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
                 var liveData = await QueryLiveAsync(db, keys);
                 await MergeAsync(db, liveData);
 
-                int result = await RowCacheDbSet(db).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false));
+                int result = await CacheDbSet(db).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false));
                 await txn.CommitAsync();
 
                 return result;

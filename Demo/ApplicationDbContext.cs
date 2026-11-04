@@ -1,6 +1,4 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Design;
-using Microsoft.Extensions.Logging;
 
 namespace Demo;
 
@@ -10,7 +8,7 @@ public class ApplicationDbContext(
     AppointmentPriceCacheConfiguration rolldownConfig) : DbContext(options)
 {
     private readonly PointsCacheConfiguration _pointsRollup = pointsRollup;
-    private readonly AppointmentPriceCacheConfiguration _priceRolldown = rolldownConfig;
+    private readonly AppointmentPriceCacheConfiguration _priceCache = rolldownConfig;
 
     /// <summary>
     /// rollup/view entity
@@ -24,54 +22,26 @@ public class ApplicationDbContext(
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
+        // capture SetCache changes
         var apptChanges = _pointsRollup.GetDimensionChanges<Appointment>(this.ChangeTracker, a => new PointsCache.Dimensions(a.Date, a.TransportId ?? 0));
 
-        var priceChanges = _priceRolldown.GetAffectedKeys(this.ChangeTracker, e => e switch
+        // capture RowCache changes
+        var priceChanges = _priceCache.GetAffectedKeys(this.ChangeTracker, e => e switch
         {
             Appointment a => a.Id,
             AppointmentItem ai => ai.AppointmentId,
             _ => 0
         });
 
+        // normal SaveChanges behavior
         var result = await base.SaveChangesAsync(cancellationToken);
 
+        // SetCache
         await _pointsRollup.MarkStaleDimensionsAsync(this, apptChanges);
-        await _priceRolldown.MarkStaleKeysAsync(this, priceChanges);
+
+        // RowCache
+        await _priceCache.MarkStaleKeysAsync(this, priceChanges);
 
         return result;
     }
-}
-
-public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<ApplicationDbContext>, IDbContextFactory<ApplicationDbContext>
-{
-    public static string ConnectionString
-    {
-        get
-        {
-            var dataDirectory = Path.Combine(AppContext.BaseDirectory, "Data");
-            Directory.CreateDirectory(dataDirectory);
-            var dbPath = Path.Combine(dataDirectory, "demo.db");
-            return $"Data Source={dbPath}";
-        }
-    }
-
-    public static void Configure(DbContextOptionsBuilder optionsBuilder)
-    {
-        optionsBuilder.UseSqlite(ConnectionString);
-        Console.WriteLine($"Using SQLite database at: {ConnectionString}");
-    }
-
-    public ApplicationDbContext CreateDbContext()
-    {
-        var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
-        Configure(optionsBuilder);
-        var rollupLogger = new LoggerFactory().CreateLogger<PointsCacheConfiguration>();
-        var rolldownLogger = new LoggerFactory().CreateLogger<AppointmentPriceCacheConfiguration>();        
-        return new ApplicationDbContext(optionsBuilder.Options, 
-            new PointsCacheConfiguration(rollupLogger, this), 
-            new AppointmentPriceCacheConfiguration(rolldownLogger, this));
-    }
-
-    public ApplicationDbContext CreateDbContext(string[] args) => CreateDbContext();
-
 }

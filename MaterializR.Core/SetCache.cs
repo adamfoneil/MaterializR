@@ -17,7 +17,7 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions>(
 
     protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
 
-    protected abstract DbSet<TCacheEntity> RollupDbSet(TDbContext db);
+    protected abstract DbSet<TCacheEntity> CacheDbSet(TDbContext db);
 
     protected abstract TCacheEntity FromDimensions(TCacheDimensions dimensions);
 
@@ -50,7 +50,7 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions>(
         var dimensions = incomingByDimensions.Keys.ToArray();
         var existingRows = await ExistingRowsAsync(dbContext, dimensions);
         var existingByDimensions = existingRows.ToDictionary(row => ToDimensions(row));
-        var dbSet = RollupDbSet(dbContext);
+        var dbSet = CacheDbSet(dbContext);
 
         foreach (var (dimension, incomingRow) in incomingByDimensions)
         {
@@ -71,7 +71,7 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions>(
     /// fetch existing rollup rows for a dimension batch so they can be marked modified
     /// </summary>
     protected virtual Task<TCacheEntity[]> ExistingRowsAsync(TDbContext dbContext, TCacheDimensions[] dimensions) =>
-        RollupDbSet(dbContext).ToArrayAsync();
+        CacheDbSet(dbContext).ToArrayAsync();
 
     /// <summary>
     /// flag dimensions as modified, inserting where they don't exist
@@ -90,7 +90,7 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions>(
 
             foreach (var (_, dim) in changes.Where(d => d.Inserted).Distinct())
             {
-                RollupDbSet(dbContext).Add(FromDimensions(dim));
+                CacheDbSet(dbContext).Add(FromDimensions(dim));
             }
 
             var modifiedDimensions = changes
@@ -150,12 +150,12 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions>(
         {
             try
             {
-                var dimensions = await RollupDbSet(db).AsNoTracking().Where(row => row.IsStale).ToArrayAsync();
+                var dimensions = await CacheDbSet(db).AsNoTracking().Where(row => row.IsStale).ToArrayAsync();
                 if (!dimensions.Any()) return 0;
                 var dimensionKeys = dimensions.Select(row => ToDimensions(row)).ToArray();
                 var liveData = await QueryLiveAsync(db, dimensionKeys);
                 await MergeAsync(db, liveData);
-                int result = await RollupDbSet(db).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false));
+                int result = await CacheDbSet(db).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false));
                 await txn.CommitAsync();
 
                 return result;

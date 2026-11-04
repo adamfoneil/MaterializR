@@ -57,5 +57,5 @@ public class AppointmentPriceCacheConfiguration(
 
     protected override AppointmentPriceCache FromKey(int key) => new() { AppointmentId = key };
 
-    protected override DbSet<AppointmentPriceCache> RowCacheDbSet(ApplicationDbContext db) => db.AppointmentPrices;    
+    protected override DbSet<AppointmentPriceCache> CacheDbSet(ApplicationDbContext db) => db.AppointmentPrices;    
 }
