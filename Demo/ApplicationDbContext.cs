@@ -1,4 +1,5 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using MaterializR.Core;
+using Microsoft.EntityFrameworkCore;
 
 namespace Demo;
 
@@ -26,7 +27,7 @@ public class ApplicationDbContext(
         var apptChanges = _pointsRollup.GetDimensionChanges<Appointment>(this.ChangeTracker, a => new PointsCache.Dimensions(a.Date, a.TransportId ?? 0));
 
         // capture RowCache changes
-        var priceChanges = _priceCache.GetAffectedKeys(this.ChangeTracker, e => e switch
+        var priceChanges = ChangeTracker.GetAffectedKeys(e => e switch
         {
             Appointment a => a.Id,
             AppointmentItem ai => ai.AppointmentId,

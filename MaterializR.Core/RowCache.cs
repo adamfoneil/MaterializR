@@ -1,5 +1,4 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.Extensions.Logging;
 using System.Linq.Expressions;
 
@@ -60,13 +59,6 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
 
         await dbContext.SaveChangesAsync();
     }
-
-    public (bool Inserted, TKey Key)[] GetAffectedKeys(ChangeTracker changeTracker, Func<object, TKey> selector) =>
-        [.. changeTracker.Entries()
-            .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
-            .Select(e => (e.State == EntityState.Added, selector(e.Entity)))
-            .Distinct()
-            .Where(val => !EqualityComparer<TKey>.Default.Equals(val.Item2, default))];
 
     public async Task<int> MarkStaleKeysAsync(TDbContext dbContext, (bool Inserted, TKey Key)[] keys)
     {
