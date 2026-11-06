@@ -24,10 +24,11 @@ public class ApplicationDbContext(
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         // capture SetCache changes
-        var apptChanges = _pointsRollup.GetDimensionChanges<Appointment>(this.ChangeTracker, a => new PointsCache.Dimensions(a.Date, a.TransportId ?? 0));
+        var apptChanges = ChangeTracker.GetTouchedDimensions<Appointment, PointsCache.Dimensions>(
+            a => new PointsCache.Dimensions(a.Date, a.TransportId ?? 0));
 
         // capture RowCache changes
-        var priceChanges = ChangeTracker.GetAffectedKeys(e => e switch
+        var priceChanges = ChangeTracker.GetTouchedKeys(e => e switch
         {
             Appointment a => a.Id,
             AppointmentItem ai => ai.AppointmentId,

@@ -19,8 +19,8 @@ The [Demo](Demo) project shows how cache rows are marked stale inside `SaveChang
 ### 1. SaveChanges marks cache rows as stale
 
 In [ApplicationDbContext](Demo/ApplicationDbContext.cs):
-- For SetCache: Appointment changes are mapped to `PointsCache.Dimensions` and passed to `PointsCacheConfiguration.MarkStaleDimensionsAsync`.
-- For RowCache: Appointment and AppointmentItem changes are mapped to appointment IDs and passed to `AppointmentPriceCacheConfiguration.MarkStaleKeysAsync`.
+- For SetCache: `ChangeTracker.GetDimensionChanges` maps appointment changes to `PointsCache.Dimensions`, then those dimensions are passed to `PointsCacheConfiguration.MarkStaleDimensionsAsync`.
+- For RowCache: `ChangeTracker.GetAffectedKeys` maps Appointment and AppointmentItem changes to appointment IDs, then those keys are passed to `AppointmentPriceCacheConfiguration.MarkStaleKeysAsync`.
 
 This keeps writes fast: no heavy recompute during the transaction that inserts/updates appointments.
 

@@ -1,5 +1,4 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.Extensions.Logging;
 
 namespace MaterializR.Core;
@@ -121,26 +120,6 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions>(
         });
     }
 
-    private static (bool Inserted, TCacheDimensions Dimensions)[] Added<TEntity>(ChangeTracker changeTracker, Func<TEntity, TCacheDimensions> selector) where TEntity : class =>
-        [.. changeTracker.Entries<TEntity>()
-            .Where(e => e.State == EntityState.Added)
-            .Select(e => (true, selector(e.Entity))).Distinct()];
-
-    private static (bool Inserted, TCacheDimensions Dimensions)[] Modified<TEntity>(ChangeTracker changeTracker, Func<TEntity, TCacheDimensions> selector) where TEntity : class =>
-        [.. changeTracker.Entries<TEntity>()
-            .Where(e => e.State == EntityState.Modified)
-            .Select(e => (false, selector(e.Entity))).Distinct()];
-
-    private static (bool Inserted, TCacheDimensions Dimensions)[] ModifiedOriginal<TEntity>(ChangeTracker changeTracker, Func<TEntity, TCacheDimensions> selector) where TEntity : class =>
-        [.. changeTracker.Entries<TEntity>()
-            .Where(e => e.State == EntityState.Modified)
-            .Select(e => (false, selector((TEntity)e.OriginalValues.ToObject()))).Distinct()];
-
-    private static IEnumerable<(bool Inserted, TCacheDimensions Dimensions)> Deleted<TEntity>(ChangeTracker changeTracker, Func<TEntity, TCacheDimensions> selector) where TEntity : class =>
-        [.. changeTracker.Entries<TEntity>()
-            .Where(e => e.State == EntityState.Deleted)
-            .Select(e => (false, selector((TEntity)e.OriginalValues.ToObject()))).Distinct()];        
-
     public async Task<int> UpdateAsync()
     {
         using var db = DbFactory.CreateDbContext();
@@ -169,13 +148,4 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions>(
         });        
     }
 
-    public (bool Inserted, TCacheDimensions Dimensions)[] GetDimensionChanges<TEntity>(ChangeTracker changeTracker, Func<TEntity, TCacheDimensions> selector) where TEntity : class
-    {
-        List<(bool Inserted, TCacheDimensions Dimensions)> changes = [];
-        changes.AddRange(Added(changeTracker, selector));
-        changes.AddRange(Modified(changeTracker, selector));
-        changes.AddRange(ModifiedOriginal(changeTracker, selector));
-        changes.AddRange(Deleted(changeTracker, selector));
-        return [..changes];
-    }
 }
