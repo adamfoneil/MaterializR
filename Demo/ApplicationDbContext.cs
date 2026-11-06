@@ -1,4 +1,5 @@
-﻿using MaterializR.Core;
+﻿using Demo.Cache;
+using MaterializR.Core;
 using Microsoft.EntityFrameworkCore;
 
 namespace Demo;
@@ -6,10 +7,10 @@ namespace Demo;
 public class ApplicationDbContext(
     DbContextOptions<ApplicationDbContext> options,
     PointsCacheConfiguration pointsRollup,
-    AppointmentPriceCacheConfiguration rolldownConfig) : DbContext(options)
+    AppointmentPriceCacheConfiguration priceCacheConfig) : DbContext(options)
 {
     private readonly PointsCacheConfiguration _pointsRollup = pointsRollup;
-    private readonly AppointmentPriceCacheConfiguration _priceCache = rolldownConfig;
+    private readonly AppointmentPriceCacheConfiguration _priceCache = priceCacheConfig;
 
     /// <summary>
     /// rollup/view entity
@@ -37,11 +38,9 @@ public class ApplicationDbContext(
 
         // normal SaveChanges behavior
         var result = await base.SaveChangesAsync(cancellationToken);
-
-        // SetCache
+        
         await _pointsRollup.MarkStaleDimensionsAsync(this, apptChanges);
 
-        // RowCache
         await _priceCache.MarkStaleKeysAsync(this, priceChanges);
 
         return result;

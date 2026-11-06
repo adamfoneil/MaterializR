@@ -1,4 +1,5 @@
 ﻿using Demo;
+using Demo.Cache;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 

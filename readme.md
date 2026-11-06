@@ -15,8 +15,9 @@ When you implement these abstract classes, inject them in your DbContext, then o
 ## Demo walkthrough
 
 The [Demo](Demo) project shows how cache rows are marked stale inside `SaveChangesAsync`, then refreshed in a batch with `UpdateAsync` using a mock scheduling system.
-- Relevant entities: [Appointment](Demo/Appointment.cs), [AppointmentItem](Demo/AppointmentItem.cs).
-- Cache examples: [PointsCacheConfiguration.cs](https://github.com/adamfoneil/MaterializR/blob/main/Demo/AppointmentPriceCache.cs#L30), [PointsCacheConfiguration.cs](https://github.com/adamfoneil/MaterializR/blob/main/Demo/PointsCache.cs#L55)
+- Relevant base entities: [Appointment](Demo/Appointment.cs), [AppointmentItem](Demo/AppointmentItem.cs). There are no particular requirements for your source-level entities that have raw data you want to aggregate.
+- Cache entities: [AppointmentPriceCache](Demo/AppointmentPriceCache.cs), [PointsCache](Demo/PointsCache.cs). These should implement [ICacheEntity](MaterializR.Core/ICacheEntity.cs), which gives your cache tables the `IsStale` bool column.
+- Cache examples: [PointsCacheConfiguration](Demo/Cache/PointsCacheConfiguration.cs), [AppointmentPriceCacheConfiguration](Demo/Cache/AppointmentPriceCacheConfiguration.cs). These abstract class implementations define how to query the live data.
 
 ### 1. SaveChanges marks cache rows as stale
 

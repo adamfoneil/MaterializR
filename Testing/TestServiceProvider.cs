@@ -1,4 +1,5 @@
 using Demo;
+using Demo.Cache;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
