@@ -14,7 +14,9 @@ When you implement these abstract classes, inject them in your DbContext, then o
 
 ## Demo walkthrough
 
-The [Demo](Demo) project shows how cache rows are marked stale inside `SaveChangesAsync`, then refreshed in a batch with `UpdateAsync` using a mock scheduling system. Relevant entities: [Appointment](Demo/Appointment.cs), [AppointmentItem](Demo/AppointmentItem.cs).
+The [Demo](Demo) project shows how cache rows are marked stale inside `SaveChangesAsync`, then refreshed in a batch with `UpdateAsync` using a mock scheduling system.
+- Relevant entities: [Appointment](Demo/Appointment.cs), [AppointmentItem](Demo/AppointmentItem.cs).
+- Cache examples: [PointsCacheConfiguration.cs](https://github.com/adamfoneil/MaterializR/blob/main/Demo/AppointmentPriceCache.cs#L30), [PointsCacheConfiguration.cs](https://github.com/adamfoneil/MaterializR/blob/main/Demo/PointsCache.cs#L55)
 
 ### 1. SaveChanges marks cache rows as stale
 
@@ -25,6 +27,10 @@ In [ApplicationDbContext](Demo/ApplicationDbContext.cs):
 This keeps writes fast: no heavy recompute during the transaction that inserts/updates appointments.
 
 ```csharp
+// pass your cache configuration classes as dependencies of your DbContext
+private readonly PointsCacheConfiguration _pointsRollup = pointsRollup;
+private readonly AppointmentPriceCacheConfiguration _priceCache = priceCacheConfig;
+
 public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
 {
     // capture SetCache changes
@@ -43,7 +49,6 @@ public override async Task<int> SaveChangesAsync(CancellationToken cancellationT
     var result = await base.SaveChangesAsync(cancellationToken);
     
     await _pointsRollup.MarkStaleDimensionsAsync(this, apptChanges);
-
     await _priceCache.MarkStaleKeysAsync(this, priceChanges);
 
     return result;
@@ -51,6 +56,19 @@ public override async Task<int> SaveChangesAsync(CancellationToken cancellationT
 ```
 
 ### 2. UpdateAsync recomputes only stale rows
+
+In UI where you need to present cached calculations, you'd inject the appropriate RowCache and/or SetCache instances and call their `UpdateAsync` method.
+
+```csharp
+@inject PointsCacheConfiguration PointsCache
+@inject AppointmentPriceCacheConfiguration PriceCache
+
+protected override async Task OnInitializedAsync()
+{
+    await PointsCache.UpdateAsync();
+    await PriceCache.UpdateAsync();
+}
+```
 
 Both cache types use the same cycle:
 1. Read stale keys/dimensions.
