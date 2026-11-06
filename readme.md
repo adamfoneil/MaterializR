@@ -19,10 +19,36 @@ The [Demo](Demo) project shows how cache rows are marked stale inside `SaveChang
 ### 1. SaveChanges marks cache rows as stale
 
 In [ApplicationDbContext](Demo/ApplicationDbContext.cs):
-- For SetCache: `ChangeTracker.GetDimensionChanges` maps appointment changes to `PointsCache.Dimensions`, then those dimensions are passed to `PointsCacheConfiguration.MarkStaleDimensionsAsync`.
-- For RowCache: `ChangeTracker.GetAffectedKeys` maps Appointment and AppointmentItem changes to appointment IDs, then those keys are passed to `AppointmentPriceCacheConfiguration.MarkStaleKeysAsync`.
+- For SetCache: `ChangeTracker.GetTouchedDimensions` maps appointment changes to `PointsCache.Dimensions`, then those dimensions are passed to `PointsCacheConfiguration.MarkStaleDimensionsAsync`.
+- For RowCache: `ChangeTracker.GetTouchedKeys` maps Appointment and AppointmentItem changes to appointment IDs, then those keys are passed to `AppointmentPriceCacheConfiguration.MarkStaleKeysAsync`.
 
 This keeps writes fast: no heavy recompute during the transaction that inserts/updates appointments.
+
+```csharp
+public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+{
+    // capture SetCache changes
+    var apptChanges = ChangeTracker.GetTouchedDimensions<Appointment, PointsCache.Dimensions>(
+        a => new PointsCache.Dimensions(a.Date, a.TransportId ?? 0));
+
+    // capture RowCache changes
+    var priceChanges = ChangeTracker.GetTouchedKeys(e => e switch
+    {
+        Appointment a => a.Id,
+        AppointmentItem ai => ai.AppointmentId,
+        _ => 0
+    });
+
+    // normal SaveChanges behavior
+    var result = await base.SaveChangesAsync(cancellationToken);
+    
+    await _pointsRollup.MarkStaleDimensionsAsync(this, apptChanges);
+
+    await _priceCache.MarkStaleKeysAsync(this, priceChanges);
+
+    return result;
+}
+```
 
 ### 2. UpdateAsync recomputes only stale rows
 
