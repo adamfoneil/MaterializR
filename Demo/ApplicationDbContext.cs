@@ -22,7 +22,11 @@ public class ApplicationDbContext(
     public DbSet<AppointmentItem> AppointmentItems { get; set; }
     public DbSet<AppointmentPriceCache> AppointmentPrices { get; set; }
 
-    public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Saves changes and marks the affected cache rows of <paramref name="tenantId"/> as stale.
+    /// Clients that want to prevent cache rows being missed can disable the parameterless SaveChanges methods
+    /// </summary>
+    public async Task<int> SaveChangesAsync(int tenantId, CancellationToken cancellationToken = default)
     {
         // capture SetCache changes
         var apptChanges = ChangeTracker.GetTouchedDimensions<Appointment, PointsCache.Dimensions>(
@@ -39,9 +43,9 @@ public class ApplicationDbContext(
         // normal SaveChanges behavior
         var result = await base.SaveChangesAsync(cancellationToken);
         
-        await _pointsRollup.MarkStaleDimensionsAsync(this, apptChanges);
+        await _pointsRollup.MarkStaleDimensionsAsync(this, tenantId, apptChanges);
 
-        await _priceCache.MarkStaleKeysAsync(this, priceChanges);
+        await _priceCache.MarkStaleKeysAsync(this, tenantId, priceChanges);
 
         return result;
     }

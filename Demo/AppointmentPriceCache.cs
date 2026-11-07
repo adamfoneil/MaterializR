@@ -4,9 +4,10 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace Demo;
 
-public class AppointmentPriceCache : ICacheEntity
+public class AppointmentPriceCache : ITenantCacheEntity<int>
 {
     public int Id { get; set; }
+    public int TenantId { get; set; }
     public int AppointmentId { get; set; }
     public decimal TotalPrice { get; set; }
     public bool IsStale { get; set; }

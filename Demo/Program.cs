@@ -33,10 +33,11 @@ public class Program
         await db.SaveChangesAsync();
         */
 
+        const int tenantId = 1;
         var rollup = sp.GetRequiredService<PointsCacheConfiguration>();
-        await rollup.UpdateAsync();
+        await rollup.UpdateAsync(tenantId);
 
-        var dims = await db.PointsCache.ToArrayAsync();
+        var dims = await db.PointsCache.Where(p => p.TenantId == tenantId).ToArrayAsync();
         foreach (var d in dims)
         {
             Console.WriteLine($"Date: {d.Date}, TransportId: {d.TransportId}, Maximum: {d.Maximum}, Scheduled: {d.Scheduled}, Available: {d.Available}, PercentFree: {d.PercentFree}");
@@ -49,6 +50,7 @@ public class Program
         {
             db.DailyLimitDefaults.Add(new DailyLimitDefault
             {
+                TenantId = 1,
                 DayOfWeek = day,
                 MaxPoints = 100
             });

@@ -6,11 +6,11 @@ namespace Demo.Cache;
 
 public class PointsCacheConfiguration(
     ILogger<PointsCacheConfiguration> logger,
-    IDbContextFactory<ApplicationDbContext> dbFactory) : SetCache<ApplicationDbContext, PointsCache, PointsCache.Dimensions>(logger, dbFactory)
+    IDbContextFactory<ApplicationDbContext> dbFactory) : SetCache<ApplicationDbContext, PointsCache, PointsCache.Dimensions, int>(logger, dbFactory)
 {   
     private record DailyPointLimitDto(DateOnly Date, int Maximum);
 
-    protected override Task<PointsCache[]> ExistingRowsAsync(ApplicationDbContext dbContext, PointsCache.Dimensions[] dimensions)
+        protected override Task<PointsCache[]> ExistingRowsAsync(ApplicationDbContext dbContext, int tenantId, PointsCache.Dimensions[] dimensions)
     {
         if (dimensions.Length == 0)
         {
@@ -22,11 +22,11 @@ public class PointsCacheConfiguration(
         var transportIds = uniqueDimensions.Select(d => d.TransportId).Distinct().ToArray();
 
         return dbContext.PointsCache
-            .Where(row => dates.Contains(row.Date) && transportIds.Contains(row.TransportId))
+                .Where(row => row.TenantId == tenantId && dates.Contains(row.Date) && transportIds.Contains(row.TransportId))
             .ToArrayAsync();
     }
 
-    private static async Task<DailyPointLimitDto[]> DailyPointLimitsAsync(ApplicationDbContext db, DateOnly from, DateOnly to)
+        private static async Task<DailyPointLimitDto[]> DailyPointLimitsAsync(ApplicationDbContext db, int tenantId, DateOnly from, DateOnly to)
     {
         if (to < from)
         {
@@ -35,12 +35,13 @@ public class PointsCacheConfiguration(
 
         var defaults = await db.DailyLimitDefaults
             .AsNoTracking()
-            .Select(d => new { d.DayOfWeek, d.MaxPoints })
-            .ToArrayAsync();
+                .Where(d => d.TenantId == tenantId)
+                .Select(d => new { d.DayOfWeek, d.MaxPoints })
+                .ToArrayAsync();
 
-        var overrides = await db.DailyLimitOverrides
-            .AsNoTracking()
-            .Where(o => o.Date >= from && o.Date <= to)
+            var overrides = await db.DailyLimitOverrides
+                .AsNoTracking()
+                .Where(o => o.TenantId == tenantId && o.Date >= from && o.Date <= to)
             .Select(o => new { o.Date, o.MaxPoints })
             .ToArrayAsync();
 
@@ -66,7 +67,7 @@ public class PointsCacheConfiguration(
         return [.. results];
     }
 
-    protected override async Task<PointsCache[]> QueryLiveAsync(ApplicationDbContext dbContext, PointsCache.Dimensions[] dimensions)
+    protected override async Task<PointsCache[]> QueryLiveAsync(ApplicationDbContext dbContext, int tenantId, PointsCache.Dimensions[] dimensions)
     {
         if (!dimensions.Any()) return [];
 
@@ -74,20 +75,20 @@ public class PointsCacheConfiguration(
         var from = uniqueDimensions.Min(d => d.Date);
         var to = uniqueDimensions.Max(d => d.Date);
 
-        return await QueryLiveImplementationAsync(dbContext, from, to);        
+        return await QueryLiveImplementationAsync(dbContext, tenantId, from, to);        
     }
 
     /// <summary>
     /// this is really for test purposes to make the low-level query results observable
     /// </summary>
-    public static async Task<PointsCache[]> QueryLiveImplementationAsync(ApplicationDbContext db, DateOnly from, DateOnly to)
+    public static async Task<PointsCache[]> QueryLiveImplementationAsync(ApplicationDbContext db, int tenantId, DateOnly from, DateOnly to)
     {
-        var dailyLimits = await DailyPointLimitsAsync(db, from, to);
+        var dailyLimits = await DailyPointLimitsAsync(db, tenantId, from, to);
         var dailyLimitLookup = dailyLimits.ToDictionary(l => l.Date, l => l.Maximum);
 
         var scheduledLookup = (await db.Appointments
             .AsNoTracking()
-            .Where(a => a.Date >= from && a.Date <= to)
+            .Where(a => a.TenantId == tenantId && a.Date >= from && a.Date <= to)
             .Where(Appointment.AffectsCapacityExpression)
             .ToArrayAsync())            
             .GroupBy(a => (a.Date, TransportId: a.TransportId ?? 0))
