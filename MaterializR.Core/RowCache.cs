@@ -4,28 +4,38 @@ using System.Linq.Expressions;
 
 namespace MaterializR.Core;
 
-public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
-    ILogger<RowCache<TDbContext, TCacheEntity, TKey>> logger,
+/// <summary>
+/// caches calculations derived from a single row, isolated per tenant
+/// </summary>
+public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
+    ILogger<RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>> logger,
     IDbContextFactory<TDbContext> dbFactory)
     where TDbContext : DbContext
-    where TCacheEntity : class, ICacheEntity, new()
+    where TCacheEntity : class, ITenantCacheEntity<TTenantKey>, new()
     where TKey : notnull
+    where TTenantKey : notnull
 {
-    protected readonly ILogger<RowCache<TDbContext, TCacheEntity, TKey>> Logger = logger;
+    protected readonly ILogger<RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>> Logger = logger;
 
     protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
 
     protected abstract DbSet<TCacheEntity> CacheDbSet(TDbContext db);
 
-    protected abstract Task<TCacheEntity[]> QueryLiveAsync(TDbContext dbContext, TKey[] keys);
+    /// <summary>
+    /// query that returns the live data for a set of keys. Source queries must be scoped to the tenant
+    /// </summary>
+    protected abstract Task<TCacheEntity[]> QueryLiveAsync(TDbContext dbContext, TTenantKey tenantId, TKey[] keys);
 
+    /// <summary>
+    /// create a new cache row for a key. <see cref="ITenantCacheEntity{TTenantKey}.TenantId"/> is set for you
+    /// </summary>
     protected abstract TCacheEntity FromKey(TKey key);
 
     protected abstract Expression<Func<TCacheEntity, TKey>> KeySelector { get; }
 
     protected abstract void UpdateFacts(TCacheEntity existingRow, TCacheEntity incomingRow);
 
-    protected virtual async Task MergeAsync(TDbContext dbContext, TCacheEntity[] liveData)
+    protected virtual async Task MergeAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] liveData)
     {
         var keySelector = KeySelector.Compile();
         var incomingByKey = liveData
@@ -33,6 +43,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
             .ToDictionary(g => g.Key, g => g.Last());
 
         var staleRows = await CacheDbSet(dbContext)
+            .ForTenant(tenantId)
             .Where(row => row.IsStale)
             .ToArrayAsync();
 
@@ -54,13 +65,14 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
 
         if (incomingByKey.Count > 0)
         {
+            foreach (var row in incomingByKey.Values) row.TenantId = tenantId;
             CacheDbSet(dbContext).AddRange(incomingByKey.Values);
         }
 
         await dbContext.SaveChangesAsync();
     }
 
-    public async Task<int> MarkStaleKeysAsync(TDbContext dbContext, (bool Inserted, TKey Key)[] keys)
+    public async Task<int> MarkStaleKeysAsync(TDbContext dbContext, TTenantKey tenantId, (bool Inserted, TKey Key)[] keys)
     {
         if (!keys.Any()) return 0;
 
@@ -82,6 +94,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
                 CacheDbSet(dbContext).AddRange(insertedKeys.Select(key =>
                 {
                     var row = FromKey(key);
+                    row.TenantId = tenantId;
                     row.IsStale = true;
                     return row;
                 }));
@@ -101,7 +114,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
                 var updatedSet = updatedKeys.ToHashSet();
                 var keySelector = KeySelector.Compile();
 
-                var rows = await CacheDbSet(dbContext).ToArrayAsync();
+                var rows = await CacheDbSet(dbContext).ForTenant(tenantId).ToArrayAsync();
                 foreach (var row in rows)
                 {
                     if (updatedSet.Contains(keySelector(row)))
@@ -118,7 +131,10 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
         });
     }
 
-    public async Task<int> UpdateAsync()
+    /// <summary>
+    /// refreshes the stale rows of a single tenant
+    /// </summary>
+    public async Task<int> UpdateAsync(TTenantKey tenantId)
     {
         using var db = DbFactory.CreateDbContext();
         using var txn = db.Database.BeginTransaction();
@@ -129,14 +145,15 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey>(
             {
                 var keys = await CacheDbSet(db)
                     .AsNoTracking()
+                    .ForTenant(tenantId)
                     .Where(e => e.IsStale)
                     .Select(KeySelector)
                     .ToArrayAsync();
 
-                var liveData = await QueryLiveAsync(db, keys);
-                await MergeAsync(db, liveData);
+                var liveData = await QueryLiveAsync(db, tenantId, keys);
+                await MergeAsync(db, tenantId, liveData);
 
-                int result = await CacheDbSet(db).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false));
+                int result = await CacheDbSet(db).ForTenant(tenantId).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false));
                 await txn.CommitAsync();
 
                 return result;

@@ -7,9 +7,11 @@ using System.Diagnostics;
 namespace Demo;
 
 [DebuggerDisplay("{Date} - {TransportId} - {Scheduled}/{Maximum} ({PercentFreeLive})")]
-public class PointsCache : ICacheEntity
+public class PointsCache : ITenantCacheEntity<int>
 {
     public int Id { get; set; }
+
+    public int TenantId { get; set; }
 
     // dimensions
 
@@ -40,7 +42,7 @@ public class PointsConfiguration : IEntityTypeConfiguration<PointsCache>
 {
     void IEntityTypeConfiguration<PointsCache>.Configure(EntityTypeBuilder<PointsCache> builder)
     {
-        builder.HasIndex(e => new { e.Date, e.TransportId }).IsUnique();        
+        builder.HasIndex(e => new { e.TenantId, e.Date, e.TransportId }).IsUnique();        
 
         builder.Property(e => e.PercentFree)
             .HasComputedColumnSql(

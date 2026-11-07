@@ -6,6 +6,7 @@ namespace Demo;
 public class DailyLimitOverride
 {
     public int Id { get; set; }    
+    public int TenantId { get; set; }
     public DateOnly Date { get; set; }
     public int MaxPoints { get; set; }
 }
@@ -14,6 +15,6 @@ public class DailyLimitOverrideConfiguration : IEntityTypeConfiguration<DailyLim
 {
     public void Configure(EntityTypeBuilder<DailyLimitOverride> builder)
     {
-        builder.HasIndex(e => e.Date).IsUnique();
+        builder.HasIndex(e => new { e.TenantId, e.Date }).IsUnique();
     }
 }

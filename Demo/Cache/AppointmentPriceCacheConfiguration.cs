@@ -7,11 +7,11 @@ namespace Demo.Cache;
 
 public class AppointmentPriceCacheConfiguration(
     ILogger<AppointmentPriceCacheConfiguration> logger, IDbContextFactory<ApplicationDbContext> dbFactory) :
-    RowCache<ApplicationDbContext, AppointmentPriceCache, int>(logger, dbFactory)
+    RowCache<ApplicationDbContext, AppointmentPriceCache, int, int>(logger, dbFactory)
 {
     protected override Expression<Func<AppointmentPriceCache, int>> KeySelector => ap => ap.AppointmentId;
 
-    protected override Task<AppointmentPriceCache[]> QueryLiveAsync(ApplicationDbContext dbContext, int[] keys)
+    protected override Task<AppointmentPriceCache[]> QueryLiveAsync(ApplicationDbContext dbContext, int tenantId, int[] keys)
     {
         if (keys.Length == 0)
         {
@@ -19,7 +19,7 @@ public class AppointmentPriceCacheConfiguration(
         }
 
         return dbContext.Appointments
-            .Where(a => keys.Contains(a.Id))
+            .Where(a => a.TenantId == tenantId && keys.Contains(a.Id))
             .Select(a => new AppointmentPriceCache
             {
                 AppointmentId = a.Id,

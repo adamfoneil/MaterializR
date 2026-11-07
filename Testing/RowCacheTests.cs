@@ -1,4 +1,4 @@
-﻿using Demo;
+using Demo;
 using Demo.Cache;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,6 +9,9 @@ namespace Testing;
 [DoNotParallelize]
 public sealed class RowCacheTests
 {
+    private const int Tenant = 1;
+    private const int OtherTenant = 2;
+
     [TestMethod]
     public async Task InsertedRows_PopulateAppointmentPriceCache()
     {
@@ -17,6 +20,7 @@ public sealed class RowCacheTests
 
         var appointment = new Appointment
         {
+            TenantId = Tenant,
             Date = DateOnly.FromDateTime(DateTime.Today),
             Time = new TimeOnly(9, 0),
             TransportId = 1,
@@ -34,10 +38,10 @@ public sealed class RowCacheTests
         await db.SaveChangesAsync();
 
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
-        await cache.MarkStaleKeysAsync(db, [(true, appointment.Id)]);
-        await cache.UpdateAsync();
+        await cache.MarkStaleKeysAsync(db, Tenant, [(true, appointment.Id)]);
+        await cache.UpdateAsync(Tenant);
 
-        await AssertCacheMatchesLiveAsync(db);
+        await AssertCacheMatchesLiveAsync(db, Tenant);
     }
 
     [TestMethod]
@@ -48,6 +52,7 @@ public sealed class RowCacheTests
 
         var appointment = new Appointment
         {
+            TenantId = Tenant,
             Date = DateOnly.FromDateTime(DateTime.Today),
             Time = new TimeOnly(10, 30),
             TransportId = 2,
@@ -64,8 +69,8 @@ public sealed class RowCacheTests
         await db.SaveChangesAsync();
 
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
-        await cache.MarkStaleKeysAsync(db, [(true, appointment.Id)]);
-        await cache.UpdateAsync();
+        await cache.MarkStaleKeysAsync(db, Tenant, [(true, appointment.Id)]);
+        await cache.UpdateAsync(Tenant);
 
         await db.AppointmentItems
             .Where(i => i.AppointmentId == appointment.Id && i.ItemId == 5)
@@ -78,9 +83,9 @@ public sealed class RowCacheTests
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(p => p.IsStale, true));
 
-        await cache.UpdateAsync();
+        await cache.UpdateAsync(Tenant);
 
-        await AssertCacheMatchesLiveAsync(db);
+        await AssertCacheMatchesLiveAsync(db, Tenant);
     }
 
     [TestMethod]
@@ -91,6 +96,7 @@ public sealed class RowCacheTests
 
         var appointment = new Appointment
         {
+            TenantId = Tenant,
             Date = DateOnly.FromDateTime(DateTime.Today),
             Time = new TimeOnly(8, 0),
             TransportId = 3,
@@ -108,19 +114,84 @@ public sealed class RowCacheTests
         await db.SaveChangesAsync();
 
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
-        await cache.MarkStaleKeysAsync(db, [(true, appointment.Id)]);
-        await cache.UpdateAsync();
+        await cache.MarkStaleKeysAsync(db, Tenant, [(true, appointment.Id)]);
+        await cache.UpdateAsync(Tenant);
 
         await db.AppointmentItems
             .Where(i => i.AppointmentId == appointment.Id && i.ItemId == 12)
             .ExecuteDeleteAsync();
 
-        await cache.MarkStaleKeysAsync(db, [(false, appointment.Id)]);
+        await cache.MarkStaleKeysAsync(db, Tenant, [(false, appointment.Id)]);
 
-        await cache.UpdateAsync();
+        await cache.UpdateAsync(Tenant);
 
-        await AssertCacheMatchesLiveAsync(db);
+        await AssertCacheMatchesLiveAsync(db, Tenant);
     }
+
+    [TestMethod]
+    public async Task UpdateAsync_OnlyRefreshesRequestedTenant()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+
+        var mine = NewAppointment(Tenant, 10m);
+        var theirs = NewAppointment(OtherTenant, 99m);
+        db.Appointments.AddRange(mine, theirs);
+        await db.SaveChangesAsync();
+
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        await cache.MarkStaleKeysAsync(db, Tenant, [(true, mine.Id)]);
+        await cache.MarkStaleKeysAsync(db, OtherTenant, [(true, theirs.Id)]);
+
+        await cache.UpdateAsync(Tenant);
+
+        await AssertCacheMatchesLiveAsync(db, Tenant);
+
+        var other = await db.AppointmentPrices.AsNoTracking().SingleAsync(p => p.TenantId == OtherTenant);
+        Assert.IsTrue(other.IsStale);
+        Assert.AreEqual(0m, other.TotalPrice);
+
+        await cache.UpdateAsync(OtherTenant);
+
+        await AssertCacheMatchesLiveAsync(db, OtherTenant);
+        await AssertCacheMatchesLiveAsync(db, Tenant);
+    }
+
+    [TestMethod]
+    public async Task MarkStaleKeys_DoesNotTouchOtherTenantRows()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+
+        var mine = NewAppointment(Tenant, 10m);
+        var theirs = NewAppointment(OtherTenant, 99m);
+        db.Appointments.AddRange(mine, theirs);
+        await db.SaveChangesAsync();
+
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        await cache.MarkStaleKeysAsync(db, Tenant, [(true, mine.Id)]);
+        await cache.MarkStaleKeysAsync(db, OtherTenant, [(true, theirs.Id)]);
+        await cache.UpdateAsync(Tenant);
+        await cache.UpdateAsync(OtherTenant);
+
+        await cache.MarkStaleKeysAsync(db, Tenant, [(false, mine.Id), (false, theirs.Id)]);
+
+        var rows = await db.AppointmentPrices.AsNoTracking().ToArrayAsync();
+        Assert.IsTrue(rows.Single(r => r.TenantId == Tenant).IsStale);
+        Assert.IsFalse(rows.Single(r => r.TenantId == OtherTenant).IsStale);
+    }
+
+    private static Appointment NewAppointment(int tenantId, decimal unitPrice) => new()
+    {
+        TenantId = tenantId,
+        Date = DateOnly.FromDateTime(DateTime.Today),
+        Time = new TimeOnly(9, 0),
+        TransportId = 1,
+        Points = 3,
+        ClientId = 100,
+        Status = AppointmentStatus.Scheduled,
+        Items = [new AppointmentItem { ItemId = 1, Quantity = 2, UnitPrice = unitPrice }]
+    };
 
     private static async Task<ApplicationDbContext> InitDbAsync(IServiceScope scope)
     {
@@ -130,16 +201,18 @@ public sealed class RowCacheTests
         return db;
     }
 
-    private static async Task AssertCacheMatchesLiveAsync(ApplicationDbContext db)
+    private static async Task AssertCacheMatchesLiveAsync(ApplicationDbContext db, int tenantId)
     {
         var appointmentIds = await db.Appointments
             .AsNoTracking()
+            .Where(a => a.TenantId == tenantId)
             .Select(a => a.Id)
             .OrderBy(id => id)
             .ToArrayAsync();
 
         var totalsByAppointment = (await db.AppointmentItems
             .AsNoTracking()
+            .Where(i => i.Appointment!.TenantId == tenantId)
             .GroupBy(i => i.AppointmentId)
             .Select(g => new
             {
@@ -159,6 +232,7 @@ public sealed class RowCacheTests
 
         var actual = await db.AppointmentPrices
             .AsNoTracking()
+            .Where(a => a.TenantId == tenantId)
             .OrderBy(a => a.AppointmentId)
             .ToArrayAsync();
 
