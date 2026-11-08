@@ -10,7 +10,7 @@ public record DimensionChangesResult(int Inserted, int Updated);
 /// </summary>
 public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTenantKey>(
     ILogger<SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTenantKey>> logger,
-    IDbContextFactory<TDbContext> dbFactory) 
+    IDbContextFactory<TDbContext> dbFactory)
     where TDbContext : DbContext
     where TCacheEntity : class, ITenantCacheEntity<TTenantKey>
     where TCacheDimensions : notnull
@@ -42,19 +42,21 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
     /// <summary>
     /// upsert queried live data into the cache/view table
     /// </summary>
-    protected virtual async Task MergeAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] data)
+    protected virtual async Task MergeAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] data, CancellationToken? cancellationToken = null)
     {
         if (data.Length == 0)
         {
             return;
         }
 
+        cancellationToken ??= CancellationToken.None;
+
         var incomingByDimensions = data
             .GroupBy(row => ToDimensions(row))
             .ToDictionary(g => g.Key, g => g.Last());
 
         var dimensions = incomingByDimensions.Keys.ToArray();
-        var existingRows = await ExistingRowsAsync(dbContext, tenantId, dimensions);
+        var existingRows = await ExistingRowsAsync(dbContext, tenantId, dimensions, cancellationToken.Value);
         var existingByDimensions = existingRows.ToDictionary(row => ToDimensions(row));
         var dbSet = CacheDbSet(dbContext);
 
@@ -78,15 +80,17 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
     /// fetch existing rollup rows of a tenant for a dimension batch so they can be marked modified.
     /// Overrides must restrict results to the tenant, for example with <c>.Where(row => row.TenantId.Equals(tenantId))</c>
     /// </summary>
-    protected virtual Task<TCacheEntity[]> ExistingRowsAsync(TDbContext dbContext, TTenantKey tenantId, TCacheDimensions[] dimensions) =>
-        CacheDbSet(dbContext).ForTenant(tenantId).ToArrayAsync();
+    protected virtual Task<TCacheEntity[]> ExistingRowsAsync(TDbContext dbContext, TTenantKey tenantId, TCacheDimensions[] dimensions, CancellationToken cancellationToken) =>
+        CacheDbSet(dbContext).ForTenant(tenantId).ToArrayAsync(cancellationToken);
 
     /// <summary>
     /// flag dimensions as modified, inserting where they don't exist
     /// </summary>
-    public async Task<DimensionChangesResult> MarkStaleDimensionsAsync(TDbContext dbContext, TTenantKey tenantId, (bool Inserted, TCacheDimensions Dimensions)[] changes)
+    public async Task<DimensionChangesResult> MarkStaleDimensionsAsync(TDbContext dbContext, TTenantKey tenantId, (bool Inserted, TCacheDimensions Dimensions)[] changes, CancellationToken? cancellationToken = null)
     {
         if (!changes.Any()) return new(0, 0);
+
+        cancellationToken ??= CancellationToken.None;
 
         return await Util.TrackDuration(Logger, async () =>
         {
@@ -112,7 +116,7 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
             if (modifiedDimensions.Length > 0)
             {
                 var modifiedLookup = modifiedDimensions.ToHashSet();
-                var existingRows = await ExistingRowsAsync(dbContext, tenantId, modifiedDimensions);
+                var existingRows = await ExistingRowsAsync(dbContext, tenantId, modifiedDimensions, cancellationToken.Value);
 
                 foreach (var entity in existingRows)
                 {
@@ -124,7 +128,7 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
                 }
             }
 
-            await dbContext.SaveChangesAsync();
+            await dbContext.SaveChangesAsync(cancellationToken.Value);
 
             return new DimensionChangesResult(
                 Inserted: changes.Count(d => d.Inserted),
@@ -135,8 +139,10 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
     /// <summary>
     /// refreshes the stale rows of a single tenant
     /// </summary>
-    public async Task<int> UpdateAsync(TTenantKey tenantId)
+    public async Task<int> UpdateAsync(TTenantKey tenantId, CancellationToken? cancellationToken = null)
     {
+        cancellationToken ??= CancellationToken.None;
+
         using var db = DbFactory.CreateDbContext();
         using var txn = db.Database.BeginTransaction();
 
@@ -144,23 +150,23 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
         {
             try
             {
-                var dimensions = await CacheDbSet(db).AsNoTracking().ForTenant(tenantId).Where(row => row.IsStale).ToArrayAsync();
+                var dimensions = await CacheDbSet(db).AsNoTracking().ForTenant(tenantId).Where(row => row.IsStale).ToArrayAsync(cancellationToken.Value);
                 if (!dimensions.Any()) return 0;
                 var dimensionKeys = dimensions.Select(row => ToDimensions(row)).ToArray();
                 var liveData = await QueryLiveAsync(db, tenantId, dimensionKeys);
-                await MergeAsync(db, tenantId, liveData);
-                int result = await CacheDbSet(db).ForTenant(tenantId).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false));
-                await txn.CommitAsync();
+                await MergeAsync(db, tenantId, liveData, cancellationToken);
+                int result = await CacheDbSet(db).ForTenant(tenantId).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false), cancellationToken.Value);
+                await txn.CommitAsync(cancellationToken.Value);
 
                 return result;
             }
             catch (Exception exc)
             {
-                await txn.RollbackAsync();
-                Logger.LogError(exc, "Error in UpdateAsync");                
+                await txn.RollbackAsync(cancellationToken.Value);
+                Logger.LogError(exc, "Error in UpdateAsync");
                 throw;
             }
-        });        
+        });
     }
 
 }

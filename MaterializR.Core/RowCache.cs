@@ -72,16 +72,18 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
         await dbContext.SaveChangesAsync();
     }
 
-    public async Task<int> MarkStaleKeysAsync(TDbContext dbContext, TTenantKey tenantId, (bool Inserted, TKey Key)[] keys)
+    public async Task<int> MarkStaleKeysAsync(TDbContext dbContext, TTenantKey tenantId, (bool Inserted, TKey Key)[] keys, CancellationToken? cancellationToken = null)
     {
         if (!keys.Any()) return 0;
+
+        cancellationToken ??= CancellationToken.None;
 
         return await Util.TrackDuration(Logger, async () =>
         {
             if (Logger.IsEnabled(LogLevel.Information))
             {
                 Logger.LogInformation("Marking stale keys: {keys}", string.Join(", ", keys.Select(k => k.Key)));
-            }            
+            }
 
             var insertedKeys = keys
                 .Where(k => k.Inserted)
@@ -100,7 +102,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
                 }));
             }
 
-            int inserted = await dbContext.SaveChangesAsync();
+            int inserted = await dbContext.SaveChangesAsync(cancellationToken.Value);
 
             var updatedKeys = keys
                 .Where(k => !k.Inserted)
@@ -114,7 +116,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
                 var updatedSet = updatedKeys.ToHashSet();
                 var keySelector = KeySelector.Compile();
 
-                var rows = await CacheDbSet(dbContext).ForTenant(tenantId).ToArrayAsync();
+                var rows = await CacheDbSet(dbContext).ForTenant(tenantId).ToArrayAsync(cancellationToken.Value);
                 foreach (var row in rows)
                 {
                     if (updatedSet.Contains(keySelector(row)))
@@ -124,7 +126,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
                     }
                 }
 
-                updated = await dbContext.SaveChangesAsync();
+                updated = await dbContext.SaveChangesAsync(cancellationToken.Value);
             }
 
             return inserted + updated;
@@ -134,8 +136,10 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
     /// <summary>
     /// refreshes the stale rows of a single tenant
     /// </summary>
-    public async Task<int> UpdateAsync(TTenantKey tenantId)
+    public async Task<int> UpdateAsync(TTenantKey tenantId, CancellationToken? cancellationToken = null)
     {
+        cancellationToken ??= CancellationToken.None;
+
         using var db = DbFactory.CreateDbContext();
         using var txn = db.Database.BeginTransaction();
 
@@ -148,22 +152,22 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
                     .ForTenant(tenantId)
                     .Where(e => e.IsStale)
                     .Select(KeySelector)
-                    .ToArrayAsync();
+                    .ToArrayAsync(cancellationToken.Value);
 
                 var liveData = await QueryLiveAsync(db, tenantId, keys);
                 await MergeAsync(db, tenantId, liveData);
 
-                int result = await CacheDbSet(db).ForTenant(tenantId).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false));
-                await txn.CommitAsync();
+                int result = await CacheDbSet(db).ForTenant(tenantId).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false), cancellationToken.Value);
+                await txn.CommitAsync(cancellationToken.Value);
 
                 return result;
             }
             catch (Exception exc)
             {
-                await txn.RollbackAsync();
+                await txn.RollbackAsync(cancellationToken.Value);
                 Logger.LogError(exc, "Error in UpdateAsync");
                 throw;
             }
-        });               
+        });
     }
 }
