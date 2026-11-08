@@ -11,7 +11,7 @@ public class AppointmentPriceCacheConfiguration(
 {
     protected override Expression<Func<AppointmentPriceCache, int>> KeySelector => ap => ap.AppointmentId;
 
-    protected override Task<AppointmentPriceCache[]> QueryLiveAsync(ApplicationDbContext dbContext, int tenantId, int[] keys)
+    protected override Task<AppointmentPriceCache[]> QueryLiveAsync(ApplicationDbContext dbContext, int tenantId, int[] keys, CancellationToken cancellationToken)
     {
         if (keys.Length == 0)
         {
@@ -25,7 +25,7 @@ public class AppointmentPriceCacheConfiguration(
                 AppointmentId = a.Id,
                 TotalPrice = a.Items.Sum(i => (decimal?)(i.UnitPrice * i.Quantity)) ?? 0m
             })
-            .ToArrayAsync();
+            .ToArrayAsync(cancellationToken);
     }
 
     protected override void UpdateFacts(AppointmentPriceCache existingRow, AppointmentPriceCache incomingRow)
@@ -35,5 +35,5 @@ public class AppointmentPriceCacheConfiguration(
 
     protected override AppointmentPriceCache FromKey(int key) => new() { AppointmentId = key };
 
-    protected override DbSet<AppointmentPriceCache> CacheDbSet(ApplicationDbContext db) => db.AppointmentPrices;    
+    protected override DbSet<AppointmentPriceCache> CacheDbSet(ApplicationDbContext db) => db.AppointmentPrices;
 }

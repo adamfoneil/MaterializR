@@ -7,10 +7,10 @@ namespace Demo.Cache;
 public class PointsCacheConfiguration(
     ILogger<PointsCacheConfiguration> logger,
     IDbContextFactory<ApplicationDbContext> dbFactory) : SetCache<ApplicationDbContext, PointsCache, PointsCache.Dimensions, int>(logger, dbFactory)
-{   
+{
     private record DailyPointLimitDto(DateOnly Date, int Maximum);
 
-        protected override Task<PointsCache[]> ExistingRowsAsync(ApplicationDbContext dbContext, int tenantId, PointsCache.Dimensions[] dimensions)
+    protected override Task<PointsCache[]> ExistingRowsAsync(ApplicationDbContext dbContext, int tenantId, PointsCache.Dimensions[] dimensions, CancellationToken cancellationToken)
     {
         if (dimensions.Length == 0)
         {
@@ -22,11 +22,11 @@ public class PointsCacheConfiguration(
         var transportIds = uniqueDimensions.Select(d => d.TransportId).Distinct().ToArray();
 
         return dbContext.PointsCache
-                .Where(row => row.TenantId == tenantId && dates.Contains(row.Date) && transportIds.Contains(row.TransportId))
-            .ToArrayAsync();
+            .Where(row => row.TenantId == tenantId && dates.Contains(row.Date) && transportIds.Contains(row.TransportId))
+            .ToArrayAsync(cancellationToken);
     }
 
-        private static async Task<DailyPointLimitDto[]> DailyPointLimitsAsync(ApplicationDbContext db, int tenantId, DateOnly from, DateOnly to)
+    private static async Task<DailyPointLimitDto[]> DailyPointLimitsAsync(ApplicationDbContext db, int tenantId, DateOnly from, DateOnly to, CancellationToken cancellationToken)
     {
         if (to < from)
         {
@@ -37,13 +37,13 @@ public class PointsCacheConfiguration(
             .AsNoTracking()
                 .Where(d => d.TenantId == tenantId)
                 .Select(d => new { d.DayOfWeek, d.MaxPoints })
-                .ToArrayAsync();
+                .ToArrayAsync(cancellationToken);
 
-            var overrides = await db.DailyLimitOverrides
-                .AsNoTracking()
-                .Where(o => o.TenantId == tenantId && o.Date >= from && o.Date <= to)
+        var overrides = await db.DailyLimitOverrides
+            .AsNoTracking()
+            .Where(o => o.TenantId == tenantId && o.Date >= from && o.Date <= to)
             .Select(o => new { o.Date, o.MaxPoints })
-            .ToArrayAsync();
+            .ToArrayAsync(cancellationToken);
 
         var defaultLookup = defaults.ToDictionary(d => d.DayOfWeek, d => d.MaxPoints);
 
@@ -67,7 +67,7 @@ public class PointsCacheConfiguration(
         return [.. results];
     }
 
-    protected override async Task<PointsCache[]> QueryLiveAsync(ApplicationDbContext dbContext, int tenantId, PointsCache.Dimensions[] dimensions)
+    protected override async Task<PointsCache[]> QueryLiveAsync(ApplicationDbContext dbContext, int tenantId, PointsCache.Dimensions[] dimensions, CancellationToken cancellationToken)
     {
         if (!dimensions.Any()) return [];
 
@@ -75,22 +75,22 @@ public class PointsCacheConfiguration(
         var from = uniqueDimensions.Min(d => d.Date);
         var to = uniqueDimensions.Max(d => d.Date);
 
-        return await QueryLiveImplementationAsync(dbContext, tenantId, from, to);        
+        return await QueryLiveImplementationAsync(dbContext, tenantId, from, to, cancellationToken);
     }
 
     /// <summary>
     /// this is really for test purposes to make the low-level query results observable
     /// </summary>
-    public static async Task<PointsCache[]> QueryLiveImplementationAsync(ApplicationDbContext db, int tenantId, DateOnly from, DateOnly to)
+    public static async Task<PointsCache[]> QueryLiveImplementationAsync(ApplicationDbContext db, int tenantId, DateOnly from, DateOnly to, CancellationToken cancellationToken = default)
     {
-        var dailyLimits = await DailyPointLimitsAsync(db, tenantId, from, to);
+        var dailyLimits = await DailyPointLimitsAsync(db, tenantId, from, to, cancellationToken);
         var dailyLimitLookup = dailyLimits.ToDictionary(l => l.Date, l => l.Maximum);
 
         var scheduledLookup = (await db.Appointments
             .AsNoTracking()
             .Where(a => a.TenantId == tenantId && a.Date >= from && a.Date <= to)
             .Where(Appointment.AffectsCapacityExpression)
-            .ToArrayAsync())            
+            .ToArrayAsync(cancellationToken))
             .GroupBy(a => (a.Date, TransportId: a.TransportId ?? 0))
             .ToDictionary(g => g.Key, g => g.Sum(a => a.Points));
 
@@ -117,5 +117,5 @@ public class PointsCacheConfiguration(
         TransportId = dimensions.TransportId
     };
 
-    protected override PointsCache.Dimensions ToDimensions(PointsCache entity) => new(entity.Date, entity.TransportId); 
+    protected override PointsCache.Dimensions ToDimensions(PointsCache entity) => new(entity.Date, entity.TransportId);
 }
