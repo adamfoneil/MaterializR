@@ -88,7 +88,7 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
     {
         if (!changes.Any()) return new(0, 0);
 
-        return await Util.TrackDuration(Logger, async () =>
+        return await Util.LogDuration(Logger, async () =>
         {
             if (Logger.IsEnabled(LogLevel.Information))
             {
@@ -140,7 +140,7 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
         using var db = DbFactory.CreateDbContext();
         await using var txn = await db.Database.BeginTransactionAsync(cancellationToken);
 
-        return await Util.TrackDuration(Logger, async () =>
+        return await Util.LogDuration(Logger, async () =>
         {
             try
             {

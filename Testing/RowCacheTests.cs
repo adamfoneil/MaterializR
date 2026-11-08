@@ -181,6 +181,45 @@ public sealed class RowCacheTests
         Assert.IsFalse(rows.Single(r => r.TenantId == OtherTenant).IsStale);
     }
 
+    [TestMethod]
+    public async Task MarkAndUpdateWhere_UpsertsOnlyMatchingRowsForTenant()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var existing = NewAppointment(Tenant, 10m);
+        var fresh = NewAppointment(Tenant, 20m);
+        var outOfWindow = NewAppointment(Tenant, 30m);
+        outOfWindow.Date = today.AddDays(10);
+        var theirs = NewAppointment(OtherTenant, 99m);
+        db.Appointments.AddRange(existing, fresh, outOfWindow, theirs);
+        await db.SaveChangesAsync();
+
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        await cache.MarkStaleKeysAsync(db, Tenant, [(true, existing.Id)]);
+        await cache.UpdateAsync(Tenant);
+
+        var marked = await cache.MarkStaleWhereAsync(db, Tenant,
+            db.Appointments.Where(a => a.TenantId == Tenant && a.Date == today), a => a.Id);
+        Assert.AreEqual(2, marked);
+
+        var rows = await db.AppointmentPrices.AsNoTracking().Where(p => p.TenantId == Tenant).ToArrayAsync();
+        Assert.HasCount(2, rows);
+        Assert.IsTrue(rows.All(r => r.IsStale));
+        Assert.AreEqual(0m, rows.Single(r => r.AppointmentId == fresh.Id).TotalPrice);
+
+        await cache.MarkAndUpdateWhereAsync(db, Tenant,
+            db.Appointments.Where(a => a.TenantId == Tenant && a.Date == today), a => a.Id);
+
+        var after = await db.AppointmentPrices.AsNoTracking().Where(p => p.TenantId == Tenant).ToArrayAsync();
+        Assert.HasCount(2, after);
+        Assert.IsTrue(after.All(r => !r.IsStale));
+        Assert.AreEqual(40m, after.Single(r => r.AppointmentId == fresh.Id).TotalPrice);
+        Assert.IsFalse(after.Any(r => r.AppointmentId == outOfWindow.Id));
+        Assert.IsFalse(await db.AppointmentPrices.AnyAsync(p => p.TenantId == OtherTenant));
+    }
+
     private static Appointment NewAppointment(int tenantId, decimal unitPrice) => new()
     {
         TenantId = tenantId,

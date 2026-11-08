@@ -76,7 +76,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
     {
         if (!keys.Any()) return 0;
 
-        return await Util.TrackDuration(Logger, async () =>
+        return await Util.LogDuration(Logger, async () =>
         {
             if (Logger.IsEnabled(LogLevel.Information))
             {
@@ -131,6 +131,89 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
         });
     }
 
+    private const int KeyChunkSize = 1000;
+
+    /// <summary>
+    /// upserts cache rows for every source row returned by <paramref name="query"/>, flagging them stale.
+    /// Inserted rows have default fact values until <see cref="UpdateAsync"/> runs. The query must be scoped to the tenant
+    /// </summary>
+    /// <returns>number of cache rows inserted or flagged stale</returns>
+    public async Task<int> MarkStaleWhereAsync<TEntity>(
+        TDbContext dbContext, TTenantKey tenantId,
+        IQueryable<TEntity> query, Expression<Func<TEntity, TKey>> sourceKey,
+        CancellationToken cancellationToken = default) =>
+        await Util.LogDuration(Logger, async () =>
+        {
+            var keys = await query.Select(sourceKey).Distinct().ToArrayAsync(cancellationToken);
+            if (keys.Length == 0) return 0;
+
+            var ownsTransaction = dbContext.Database.CurrentTransaction is null;
+            await using var txn = ownsTransaction ? await dbContext.Database.BeginTransactionAsync(cancellationToken) : null;
+
+            int total = 0;
+            foreach (var chunk in keys.Chunk(KeyChunkSize))
+            {
+                var inChunk = ContainsKey(chunk);
+
+                var existingKeys = (await CacheDbSet(dbContext)
+                    .AsNoTracking()
+                    .ForTenant(tenantId)
+                    .Where(inChunk)
+                    .Select(KeySelector)
+                    .ToArrayAsync(cancellationToken))
+                    .ToHashSet();
+
+                if (existingKeys.Count > 0)
+                {
+                    total += await CacheDbSet(dbContext)
+                        .ForTenant(tenantId)
+                        .Where(inChunk)
+                        .ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, true), cancellationToken);
+                }
+
+                var missing = chunk.Where(key => !existingKeys.Contains(key)).ToArray();
+                if (missing.Length > 0)
+                {
+                    CacheDbSet(dbContext).AddRange(missing.Select(key =>
+                    {
+                        var row = FromKey(key);
+                        row.TenantId = tenantId;
+                        row.IsStale = true;
+                        return row;
+                    }));
+
+                    total += await dbContext.SaveChangesAsync(cancellationToken);
+                }
+            }
+
+            if (txn is not null) await txn.CommitAsync(cancellationToken);
+            return total;
+        });
+
+
+    /// <summary>
+    /// marks the source rows returned by <paramref name="query"/> stale (see <see cref="MarkStaleWhereAsync{TEntity}"/>),
+    /// then refreshes all stale rows of the tenant
+    /// </summary>
+    /// <returns>number of cache rows refreshed</returns>
+    public async Task<int> MarkAndUpdateWhereAsync<TEntity>(
+        TDbContext dbContext, TTenantKey tenantId,
+        IQueryable<TEntity> query, Expression<Func<TEntity, TKey>> sourceKey,
+        CancellationToken cancellationToken = default)
+    {
+        await MarkStaleWhereAsync(dbContext, tenantId, query, sourceKey, cancellationToken);
+        return await UpdateAsync(tenantId, cancellationToken);
+    }
+
+    private Expression<Func<TCacheEntity, bool>> ContainsKey(TKey[] keys)
+    {
+        var selector = KeySelector;
+        var contains = Expression.Call(
+            typeof(Enumerable), nameof(Enumerable.Contains), [typeof(TKey)],
+            Expression.Constant(keys), selector.Body);
+        return Expression.Lambda<Func<TCacheEntity, bool>>(contains, selector.Parameters);
+    }
+
     /// <summary>
     /// refreshes the stale rows of a single tenant
     /// </summary>
@@ -139,7 +222,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
         using var db = DbFactory.CreateDbContext();
         await using var txn = await db.Database.BeginTransactionAsync(cancellationToken);
 
-        return await Util.TrackDuration(Logger, async () =>
+        return await Util.LogDuration(Logger, async () =>
         {
             try
             {
