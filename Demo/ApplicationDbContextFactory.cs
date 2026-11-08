@@ -29,9 +29,9 @@ public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<Applicati
         var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
         Configure(optionsBuilder);
         var rollupLogger = new LoggerFactory().CreateLogger<PointsCacheConfiguration>();
-        var rolldownLogger = new LoggerFactory().CreateLogger<AppointmentPriceCacheConfiguration>();        
-        return new ApplicationDbContext(optionsBuilder.Options, 
-            new PointsCacheConfiguration(rollupLogger, this), 
+        var rolldownLogger = new LoggerFactory().CreateLogger<AppointmentPriceCacheConfiguration>();
+        return new ApplicationDbContext(optionsBuilder.Options,
+            new PointsCacheConfiguration(rollupLogger, this),
             new AppointmentPriceCacheConfiguration(rolldownLogger, this));
     }
 

@@ -5,7 +5,7 @@ namespace Demo;
 
 public class DailyLimitOverride
 {
-    public int Id { get; set; }    
+    public int Id { get; set; }
     public int TenantId { get; set; }
     public DateOnly Date { get; set; }
     public int MaxPoints { get; set; }

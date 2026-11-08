@@ -13,7 +13,7 @@ public enum AppointmentStatus
 
 public class Appointment
 {
-    public int Id { get; set; }    
+    public int Id { get; set; }
     public int TenantId { get; set; }
     public int ClientId { get; set; }
     public int? TransportId { get; set; }

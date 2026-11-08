@@ -5,7 +5,7 @@ namespace Demo;
 
 public class DailyLimitDefault
 {
-    public int Id { get; set; }    
+    public int Id { get; set; }
     public int TenantId { get; set; }
     public DayOfWeek DayOfWeek { get; set; }
     public int MaxPoints { get; set; }

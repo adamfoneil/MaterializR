@@ -18,7 +18,7 @@ public class AppointmentItem
 public class AppointmentItemConfiguration : IEntityTypeConfiguration<AppointmentItem>
 {
     public void Configure(EntityTypeBuilder<AppointmentItem> builder)
-    {        
+    {
         builder.HasOne(e => e.Appointment).WithMany(a => a.Items).HasForeignKey(e => e.AppointmentId).OnDelete(DeleteBehavior.Restrict);
 
         builder.Property(ai => ai.Quantity).IsRequired();

@@ -42,7 +42,7 @@ public class ApplicationDbContext(
 
         // normal SaveChanges behavior
         var result = await base.SaveChangesAsync(cancellationToken);
-        
+
         await _pointsRollup.MarkStaleDimensionsAsync(this, tenantId, apptChanges);
 
         await _priceCache.MarkStaleKeysAsync(this, tenantId, priceChanges);

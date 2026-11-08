@@ -42,7 +42,7 @@ public class PointsConfiguration : IEntityTypeConfiguration<PointsCache>
 {
     void IEntityTypeConfiguration<PointsCache>.Configure(EntityTypeBuilder<PointsCache> builder)
     {
-        builder.HasIndex(e => new { e.TenantId, e.Date, e.TransportId }).IsUnique();        
+        builder.HasIndex(e => new { e.TenantId, e.Date, e.TransportId }).IsUnique();
 
         builder.Property(e => e.PercentFree)
             .HasComputedColumnSql(
