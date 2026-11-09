@@ -28,7 +28,7 @@ public sealed class SetCacheTests
 
         await db.SaveChangesAsync();
 
-        var rollup = scope.ServiceProvider.GetRequiredService<PointsCacheConfiguration>();
+        var rollup = scope.ServiceProvider.GetRequiredService<PointsSetCache>();
         await MarkStaleAsync(rollup, db, Tenant, baseDate, 1, true);
         await MarkStaleAsync(rollup, db, Tenant, baseDate, 0, true);
         await rollup.UpdateAsync(Tenant);
@@ -56,7 +56,7 @@ public sealed class SetCacheTests
         db.Appointments.Add(appointment);
         await db.SaveChangesAsync();
 
-        var rollup = scope.ServiceProvider.GetRequiredService<PointsCacheConfiguration>();
+        var rollup = scope.ServiceProvider.GetRequiredService<PointsSetCache>();
         await MarkStaleAsync(rollup, db, Tenant, baseDate, 1, true);
         await rollup.UpdateAsync(Tenant);
 
@@ -105,7 +105,7 @@ public sealed class SetCacheTests
         db.Appointments.AddRange(keep, remove);
         await db.SaveChangesAsync();
 
-        var rollup = scope.ServiceProvider.GetRequiredService<PointsCacheConfiguration>();
+        var rollup = scope.ServiceProvider.GetRequiredService<PointsSetCache>();
         await MarkStaleAsync(rollup, db, Tenant, baseDate, 1, true);
         await rollup.UpdateAsync(Tenant);
 
@@ -137,7 +137,7 @@ public sealed class SetCacheTests
             new Appointment { TenantId = OtherTenant, Date = baseDate, TransportId = 1, Points = 8, ClientId = 101, Status = AppointmentStatus.Scheduled });
         await db.SaveChangesAsync();
 
-        var rollup = scope.ServiceProvider.GetRequiredService<PointsCacheConfiguration>();
+        var rollup = scope.ServiceProvider.GetRequiredService<PointsSetCache>();
         await MarkStaleAsync(rollup, db, Tenant, baseDate, 1, true);
         await MarkStaleAsync(rollup, db, OtherTenant, baseDate, 1, true);
 
@@ -170,7 +170,7 @@ public sealed class SetCacheTests
             new Appointment { TenantId = OtherTenant, Date = baseDate, TransportId = 1, Points = 8, ClientId = 101, Status = AppointmentStatus.Scheduled });
         await db.SaveChangesAsync();
 
-        var rollup = scope.ServiceProvider.GetRequiredService<PointsCacheConfiguration>();
+        var rollup = scope.ServiceProvider.GetRequiredService<PointsSetCache>();
         await MarkStaleAsync(rollup, db, Tenant, baseDate, 1, true);
         await MarkStaleAsync(rollup, db, OtherTenant, baseDate, 1, true);
         await rollup.UpdateAsync(Tenant);
@@ -183,7 +183,7 @@ public sealed class SetCacheTests
         Assert.IsFalse(rows.Single(r => r.TenantId == OtherTenant).IsStale);
     }
 
-    private static Task MarkStaleAsync(PointsCacheConfiguration rollup, ApplicationDbContext db, int tenantId, DateOnly date, int transportId, bool inserted) =>
+    private static Task MarkStaleAsync(PointsSetCache rollup, ApplicationDbContext db, int tenantId, DateOnly date, int transportId, bool inserted) =>
         rollup.MarkStaleDimensionsAsync(db, tenantId, [(inserted, new PointsCache.Dimensions(date, transportId))]);
 
     private static async Task<ApplicationDbContext> InitDbAsync(IServiceScope scope)
@@ -215,7 +215,7 @@ public sealed class SetCacheTests
 
     private static async Task AssertRollupMatchesLiveAsync(ApplicationDbContext db, int tenantId, DateOnly from, DateOnly to)
     {
-        var expected = (await PointsCacheConfiguration.QueryLiveImplementationAsync(db, tenantId, from, to))
+        var expected = (await PointsSetCache.QueryLiveImplementationAsync(db, tenantId, from, to))
             .OrderBy(r => r.Date)
             .ThenBy(r => r.TransportId)
             .ToArray();

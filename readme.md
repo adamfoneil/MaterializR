@@ -17,7 +17,7 @@ When you implement these abstract classes, inject them in your DbContext, then o
 The [Demo](Demo) project shows how cache rows are marked stale inside `SaveChangesAsync`, then refreshed in a batch with `UpdateAsync` using a mock scheduling system.
 - Relevant base entities: [Appointment](Demo/Appointment.cs), [AppointmentItem](Demo/AppointmentItem.cs). There are no particular requirements for your source-level entities that have raw data you want to aggregate.
 - Cache entities: [AppointmentPriceCache](Demo/AppointmentPriceCache.cs), [PointsCache](Demo/PointsCache.cs). These should implement [ITenantCacheEntity&lt;TTenantKey&gt;](MaterializR.Core/ITenantCacheEntity.cs), which gives your cache tables the `IsStale` bool column and a `TenantId`. Include `TenantId` in the unique index of your cache tables.
-- Cache examples: [PointsCacheConfiguration](Demo/Cache/PointsCacheConfiguration.cs), [AppointmentPriceCacheConfiguration](Demo/Cache/AppointmentPriceCacheConfiguration.cs). These abstract class implementations define how to query the live data. Their live queries receive the `tenantId` and must scope source data to it.
+- Cache examples: [PointsSetCache](Demo/Cache/PointsSetCache.cs), [AppointmentPriceRowCache](Demo/Cache/AppointmentPriceRowCache.cs). These abstract class implementations define how to query the live data. Their live queries receive the `tenantId` and must scope source data to it.
 
 ## Tenant isolation
 
@@ -39,8 +39,8 @@ The tenant is passed explicitly through a `SaveChangesAsync` overload, so there 
 
 ```csharp
 // pass your cache configuration classes as dependencies of your DbContext
-private readonly PointsCacheConfiguration _pointsRollup = pointsRollup;
-private readonly AppointmentPriceCacheConfiguration _priceCache = priceCacheConfig;
+private readonly PointsSetCache _pointsRollup = pointsRollup;
+private readonly AppointmentPriceRowCache _priceCache = priceCacheConfig;
 
 public async Task<int> SaveChangesAsync(int tenantId, CancellationToken cancellationToken = default)
 {
@@ -71,8 +71,8 @@ public async Task<int> SaveChangesAsync(int tenantId, CancellationToken cancella
 In UI where you need to present cached calculations, you'd inject the appropriate RowCache and/or SetCache instances and call their `UpdateAsync` method with the current tenant.
 
 ```csharp
-@inject PointsCacheConfiguration PointsCache
-@inject AppointmentPriceCacheConfiguration PriceCache
+@inject PointsSetCache PointsCache
+@inject AppointmentPriceRowCache PriceCache
 
 protected override async Task OnInitializedAsync()
 {

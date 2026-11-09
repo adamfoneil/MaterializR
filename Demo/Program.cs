@@ -10,7 +10,7 @@ public class Program
     {
         var services = new ServiceCollection();
         services.AddDbContextFactory<ApplicationDbContext>(ApplicationDbContextFactory.Configure, ServiceLifetime.Singleton);
-        services.AddSingleton<PointsCacheConfiguration>();
+        services.AddSingleton<PointsSetCache>();
         var sp = services.BuildServiceProvider();
 
         using var scope = sp.CreateScope();
@@ -34,7 +34,7 @@ public class Program
         */
 
         const int tenantId = 1;
-        var rollup = sp.GetRequiredService<PointsCacheConfiguration>();
+        var rollup = sp.GetRequiredService<PointsSetCache>();
         await rollup.UpdateAsync(tenantId);
 
         var dims = await db.PointsCache.Where(p => p.TenantId == tenantId).ToArrayAsync();

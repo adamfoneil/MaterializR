@@ -28,11 +28,11 @@ public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<Applicati
     {
         var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
         Configure(optionsBuilder);
-        var rollupLogger = new LoggerFactory().CreateLogger<PointsCacheConfiguration>();
-        var rolldownLogger = new LoggerFactory().CreateLogger<AppointmentPriceCacheConfiguration>();
+        var rollupLogger = new LoggerFactory().CreateLogger<PointsSetCache>();
+        var rolldownLogger = new LoggerFactory().CreateLogger<AppointmentPriceRowCache>();
         return new ApplicationDbContext(optionsBuilder.Options,
-            new PointsCacheConfiguration(rollupLogger, this),
-            new AppointmentPriceCacheConfiguration(rolldownLogger, this));
+            new PointsSetCache(rollupLogger, this),
+            new AppointmentPriceRowCache(rolldownLogger, this));
     }
 
     public ApplicationDbContext CreateDbContext(string[] args) => CreateDbContext();

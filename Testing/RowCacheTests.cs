@@ -37,7 +37,7 @@ public sealed class RowCacheTests
         db.Appointments.Add(appointment);
         await db.SaveChangesAsync();
 
-        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
         await cache.MarkStaleKeysAsync(db, Tenant, [(true, appointment.Id)]);
         await cache.UpdateAsync(Tenant);
 
@@ -68,7 +68,7 @@ public sealed class RowCacheTests
         db.Appointments.Add(appointment);
         await db.SaveChangesAsync();
 
-        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
         await cache.MarkStaleKeysAsync(db, Tenant, [(true, appointment.Id)]);
         await cache.UpdateAsync(Tenant);
 
@@ -113,7 +113,7 @@ public sealed class RowCacheTests
         db.Appointments.Add(appointment);
         await db.SaveChangesAsync();
 
-        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
         await cache.MarkStaleKeysAsync(db, Tenant, [(true, appointment.Id)]);
         await cache.UpdateAsync(Tenant);
 
@@ -139,7 +139,7 @@ public sealed class RowCacheTests
         db.Appointments.AddRange(mine, theirs);
         await db.SaveChangesAsync();
 
-        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
         await cache.MarkStaleKeysAsync(db, Tenant, [(true, mine.Id)]);
         await cache.MarkStaleKeysAsync(db, OtherTenant, [(true, theirs.Id)]);
 
@@ -168,7 +168,7 @@ public sealed class RowCacheTests
         db.Appointments.AddRange(mine, theirs);
         await db.SaveChangesAsync();
 
-        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
         await cache.MarkStaleKeysAsync(db, Tenant, [(true, mine.Id)]);
         await cache.MarkStaleKeysAsync(db, OtherTenant, [(true, theirs.Id)]);
         await cache.UpdateAsync(Tenant);
@@ -196,7 +196,7 @@ public sealed class RowCacheTests
         db.Appointments.AddRange(existing, fresh, outOfWindow, theirs);
         await db.SaveChangesAsync();
 
-        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceCacheConfiguration>();
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
         await cache.MarkStaleKeysAsync(db, Tenant, [(true, existing.Id)]);
         await cache.UpdateAsync(Tenant);
 

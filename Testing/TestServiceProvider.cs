@@ -15,8 +15,8 @@ internal static class TestServiceProvider
     {
         var services = new ServiceCollection();
         services.AddDbContextFactory<ApplicationDbContext>(ApplicationDbContextFactory.Configure, ServiceLifetime.Singleton);
-        services.AddSingleton<PointsCacheConfiguration>();
-        services.AddSingleton<AppointmentPriceCacheConfiguration>();
+        services.AddSingleton<PointsSetCache>();
+        services.AddSingleton<AppointmentPriceRowCache>();
         services.AddLogging(logging =>
         {
             logging.SetMinimumLevel(LogLevel.Information);

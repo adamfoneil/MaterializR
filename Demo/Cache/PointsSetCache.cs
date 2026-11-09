@@ -4,8 +4,8 @@ using Microsoft.Extensions.Logging;
 
 namespace Demo.Cache;
 
-public class PointsCacheConfiguration(
-    ILogger<PointsCacheConfiguration> logger,
+public class PointsSetCache(
+    ILogger<PointsSetCache> logger,
     IDbContextFactory<ApplicationDbContext> dbFactory) : SetCache<ApplicationDbContext, PointsCache, PointsCache.Dimensions, int>(logger, dbFactory)
 {
     private record DailyPointLimitDto(DateOnly Date, int Maximum);

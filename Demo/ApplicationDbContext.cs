@@ -6,11 +6,11 @@ namespace Demo;
 
 public class ApplicationDbContext(
     DbContextOptions<ApplicationDbContext> options,
-    PointsCacheConfiguration pointsRollup,
-    AppointmentPriceCacheConfiguration priceCacheConfig) : DbContext(options)
+    PointsSetCache pointsRollup,
+    AppointmentPriceRowCache priceCacheConfig) : DbContext(options)
 {
-    private readonly PointsCacheConfiguration _pointsRollup = pointsRollup;
-    private readonly AppointmentPriceCacheConfiguration _priceCache = priceCacheConfig;
+    private readonly PointsSetCache _pointsRollup = pointsRollup;
+    private readonly AppointmentPriceRowCache _priceCache = priceCacheConfig;
 
     /// <summary>
     /// rollup/view entity
