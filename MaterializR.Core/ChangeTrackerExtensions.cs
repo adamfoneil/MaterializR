@@ -54,4 +54,7 @@ public static class ChangeTrackerExtensions
         [.. changeTracker.Entries<TEntity>()
             .Where(e => e.State == EntityState.Deleted)
             .Select(e => (false, selector((TEntity)e.OriginalValues.ToObject()))).Distinct()];
+
+    public static TKey[] Updated<TKey>(this (bool Inserted, TKey Key)[] items) => [.. items.Where(i => !i.Inserted).Select(i => i.Key)];
+    public static TKey[] Inserted<TKey>(this (bool Inserted, TKey Key)[] items) => [.. items.Where(i => i.Inserted).Select(i => i.Key)];
 }
