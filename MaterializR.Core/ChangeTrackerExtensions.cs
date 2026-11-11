@@ -57,4 +57,7 @@ public static class ChangeTrackerExtensions
 
     public static TKey[] Updated<TKey>(this (bool Inserted, TKey Key)[] items) => [.. items.Where(i => !i.Inserted).Select(i => i.Key)];
     public static TKey[] Inserted<TKey>(this (bool Inserted, TKey Key)[] items) => [.. items.Where(i => i.Inserted).Select(i => i.Key)];
+
+    public static TDimensions[] Updated<TEntity, TDimensions>(this (bool Inserted, TDimensions Dimensions)[] items) => [.. items.Where(i => !i.Inserted).Select(i => i.Dimensions)];
+    public static TDimensions[] Inserted<TEntity, TDimensions>(this (bool Inserted, TDimensions Dimensions)[] items) => [.. items.Where(i => i.Inserted).Select(i => i.Dimensions)];
 }
