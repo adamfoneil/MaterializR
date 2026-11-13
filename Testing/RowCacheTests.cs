@@ -220,6 +220,30 @@ public sealed class RowCacheTests
         Assert.IsFalse(await db.AppointmentPrices.AnyAsync(p => p.TenantId == OtherTenant));
     }
 
+    [TestMethod]
+    public async Task GetAsync_RefreshesStaleAppointmentPrice()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+
+        var appointment = NewAppointment(Tenant, 10m);
+        db.Appointments.Add(appointment);
+        await db.SaveChangesAsync();
+
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
+        await cache.MarkStaleKeysAsync(db, Tenant, [(true, appointment.Id)]);
+
+        var result = await cache.GetAsync(Tenant, appointment.Id);
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(20m, result.TotalPrice);
+        Assert.IsFalse(result.IsStale);
+
+        var persisted = await db.AppointmentPrices.AsNoTracking().SingleAsync(p => p.TenantId == Tenant);
+        Assert.AreEqual(20m, persisted.TotalPrice);
+        Assert.IsFalse(persisted.IsStale);
+    }
+
     private static Appointment NewAppointment(int tenantId, decimal unitPrice) => new()
     {
         TenantId = tenantId,

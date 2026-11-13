@@ -54,7 +54,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
             if (incomingByKey.TryGetValue(key, out var incomingRow))
             {
                 UpdateFacts(staleRow, incomingRow);
-                staleRow.IsStale = true;
+                staleRow.IsStale = true; // ensure that the row is still marked stale so that it will be updated in the next step
                 incomingByKey.Remove(key);
             }
             else
@@ -249,4 +249,41 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
             }
         });
     }
+
+    public async Task<TCacheEntity?> GetAsync(TTenantKey tenantId, TKey key, CancellationToken cancellationToken = default) => 
+        await Util.LogDuration(Logger, async () =>
+        {
+            using var db = DbFactory.CreateDbContext();
+
+            var selector = KeySelector;
+            var predicate = Expression.Lambda<Func<TCacheEntity, bool>>(
+                Expression.Equal(selector.Body, Expression.Constant(key, typeof(TKey))),
+                selector.Parameters);
+            var result = await CacheDbSet(db).ForTenant(tenantId).SingleOrDefaultAsync(predicate, cancellationToken);
+
+            if (result is null) return null;
+
+            if (result.IsStale)
+            {
+                if (Logger.IsEnabled(LogLevel.Information))
+                {
+                    Logger.LogInformation("GetAsync: cache row {key} is stale, refreshing", key);
+                }
+                
+                var liveData = await QueryLiveAsync(db, tenantId, [key], cancellationToken);
+                if (liveData.Length == 1)
+                {
+                    UpdateFacts(result, liveData.Single());
+                    result.IsStale = false;
+                    db.Entry(result).State = EntityState.Modified;
+                    await db.SaveChangesAsync(cancellationToken);
+                }
+                else
+                {
+                    Logger.LogWarning("GetAsync: live data for stale cache row {key} not found", key);
+                }
+            }
+
+            return result;
+        });
 }
