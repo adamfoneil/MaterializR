@@ -74,4 +74,30 @@ public abstract class InlineCache<TDbContext, TEntity, TKey>(
 
             return row;
         });
+
+    public async Task<int> MarkStaleKeysAsync(TDbContext dbContext, TKey[] keys, CancellationToken cancellationToken = default)
+    {
+        if (!keys.Any()) return 0;
+
+        return await Util.LogDuration(Logger, async () =>
+        {
+            if (Logger.IsEnabled(LogLevel.Information))
+            {
+                Logger.LogInformation("Marking stale cache rows for {table} keys: {Keys}", typeof(TEntity).Name, string.Join(", ", keys));
+            }
+
+            var selector = KeySelector;
+
+            var predicate = Expression.Lambda<Func<TEntity, bool>>(
+                Expression.Call(
+                    typeof(Enumerable), nameof(Enumerable.Contains), [typeof(TKey)],
+                    Expression.Constant(keys), selector.Body),
+                selector.Parameters);
+
+            var staleSelector = IsStaleSelector;
+            var updatedCount = await CacheDbSet(dbContext).Where(predicate).ExecuteUpdateAsync(p => p.SetProperty(staleSelector, true), cancellationToken);
+
+            return updatedCount;
+        });
+    }
 }
