@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <PackageId>EFCore.MaterializR.PostgreSql</PackageId>
+    <Title>EF Core MaterializR for PostgreSql</Title>
+    <Version>1.1.6</Version>
+    <Authors>Adam O'Neil</Authors>
+    <Company>Adam O'Neil</Company>
+    <Copyright>Copyright (c) 2026 Adam O'Neil</Copyright>
+    <Description>EF Core-based incremental cache updates for PostgreSql</Description>
+    <PackageProjectUrl>https://github.com/adamfoneil/MaterializR</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/adamfoneil/MaterializR</RepositoryUrl>
+    <PackageReadmeFile>readme.md</PackageReadmeFile>
+    <PackageTags>caching; efcore; materialize-framework; postgresql</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+	<IncludeSymbols>True</IncludeSymbols>
+	<SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\readme.md">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.89" />
+    <PackageReference Include="EFCore.MaterializR" Version="1.1.6" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>
