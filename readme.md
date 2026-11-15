@@ -19,6 +19,8 @@ Use `InlineCache` when cached values belong on an existing entity. A derived cla
 
 The focused tests cover stale and fresh rows (including leaving other rows untouched), missing rows, and a failed refresh preserving the stale flag: [refresh behavior](Testing/InlineCacheTests.cs#L17), [missing row](Testing/InlineCacheTests.cs#L56), and [failed refresh](Testing/InlineCacheTests.cs#L68).
 
+The [Testing](Testing) project runs SQLite-based tests through the demo's SQLite reference. [Testing.PostgreSql](Testing.PostgreSql) contains the PostgreSQL integration tests; set `MATERIALIZR_POSTGRESQL` to a disposable database to run them. The integration tests drop and recreate their test tables.
+
 ## Demo walkthrough
 
 The [Demo](Demo) project shows how cache rows are marked stale inside `SaveChangesAsync`, then refreshed in a batch with `UpdateAsync` using a mock scheduling system.
@@ -78,6 +80,12 @@ public async Task<int> SaveChangesAsync(int tenantId, CancellationToken cancella
 ## PostgreSQL
 
 Reference [MaterializR.PostgreSql](MaterializR.PostgreSql) for abstract PostgreSQL cache bases. Their stale-row upserts use `INSERT ... ON CONFLICT ... DO UPDATE` and require a unique key or index on the tenant column plus the non-nullable cache key/dimension columns. On conflict, only `IsStale` is changed; cached facts are preserved. The PostgreSQL bases take the key/dimension property selector used to identify that unique constraint. They use EF relational table/column metadata and the supplied context's connection and active transaction.
+
+## SQLite
+
+[MaterializR.Sqlite](MaterializR.Sqlite) contains the linked Core sources and the EF Core SQLite provider. It does not yet provide SQLite-specific stale-row upsert implementations; `RowCache` and `SetCache` subclasses must implement `UpsertStaleAsync` themselves.
+
+The SQLite and PostgreSQL projects each compile their own copy of the Core types. Reference only one of these projects or the standalone Core project in a consuming project to avoid duplicate types.
 
 ### 2. UpdateAsync recomputes only stale rows
 

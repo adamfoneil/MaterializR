@@ -7,7 +7,7 @@
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
     <PackageId>EFCore.MaterializR.PostgreSql</PackageId>
     <Title>EF Core MaterializR for PostgreSql</Title>
-    <Version>1.1.61</Version>
+    <Version>1.1.7</Version>
     <Authors>Adam O'Neil</Authors>
     <Company>Adam O'Neil</Company>
     <Copyright>Copyright (c) 2026 Adam O'Neil</Copyright>
@@ -22,6 +22,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\MaterializR.Core\ChangeTrackerExtensions.cs" Link="Core\ChangeTrackerExtensions.cs" />
+    <Compile Include="..\MaterializR.Core\ICacheEntity.cs" Link="Core\ICacheEntity.cs" />
+    <Compile Include="..\MaterializR.Core\InlineCache.cs" Link="Core\InlineCache.cs" />
+    <Compile Include="..\MaterializR.Core\ITenantCacheEntity.cs" Link="Core\ITenantCacheEntity.cs" />
+    <Compile Include="..\MaterializR.Core\RowCache.cs" Link="Core\RowCache.cs" />
+    <Compile Include="..\MaterializR.Core\SetCache.cs" Link="Core\SetCache.cs" />
+    <Compile Include="..\MaterializR.Core\Util.cs" Link="Core\Util.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="..\readme.md">
       <Pack>True</Pack>
       <PackagePath>\</PackagePath>
@@ -30,7 +40,6 @@
 
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.89" />
-    <PackageReference Include="EFCore.MaterializR" Version="1.1.62" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
   </ItemGroup>
 

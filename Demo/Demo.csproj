@@ -19,11 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\MaterializR.Core\MaterializR.Core.csproj" />
+    <Folder Include="Migrations\" />
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Migrations\" />
+    <ProjectReference Include="..\MaterializR.Sqlite\MaterializR.Sqlite.csproj" />
   </ItemGroup>
 
 </Project>
