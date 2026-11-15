@@ -2,6 +2,15 @@ name: Publish NuGet package
 
 on:
   workflow_dispatch:
+    inputs:
+      package:
+        description: Package to publish
+        type: choice
+        required: true
+        default: Core
+        options:
+          - Core
+          - PostgreSql
 
 permissions:
   id-token: write # required for NuGet trusted publishing (OIDC)
@@ -15,10 +24,17 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: |
+            10.0.x
+            11.0.x
 
-      - name: Pack
+      - name: Pack Core
+        if: inputs.package == 'Core'
         run: dotnet pack MaterializR.Core/MaterializR.Core.csproj -c Release -o artifacts -p:GeneratePackageOnBuild=false
+
+      - name: Pack PostgreSql
+        if: inputs.package == 'PostgreSql'
+        run: dotnet pack MaterializR.PostgreSql/MaterializR.PostgreSql.csproj -c Release -o artifacts -p:GeneratePackageOnBuild=false
 
       - name: NuGet login (OIDC)
         id: login
