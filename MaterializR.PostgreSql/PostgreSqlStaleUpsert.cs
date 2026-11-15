@@ -1,11 +1,10 @@
+using Dapper;
 using MaterializR.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
-using System.Data;
-using System.Data.Common;
 using System.Linq.Expressions;
 using System.Reflection;
 
@@ -77,8 +76,6 @@ internal static class PostgreSqlStaleUpsert
         var staleColumn = sqlHelper.DelimitIdentifier(staleProperty.GetColumnName(table)
             ?? throw new InvalidOperationException($"Property {staleProperty.Name} is not mapped to table {tableName}."));
         var connection = dbContext.Database.GetDbConnection();
-        var ownsConnection = connection.State != ConnectionState.Open;
-        if (ownsConnection) await connection.OpenAsync(cancellationToken);
 
         var batchSize = Math.Max(1, MaxParametersPerCommand / mappedColumns.Length);
         IDbContextTransaction? transaction = null;
@@ -92,36 +89,36 @@ internal static class PostgreSqlStaleUpsert
             var dbTransaction = dbContext.Database.CurrentTransaction?.GetDbTransaction();
             foreach (var batch in rows.Chunk(batchSize))
             {
-                await using var command = connection.CreateCommand();
-                command.Transaction = dbTransaction;
+                var parameters = new DynamicParameters();
                 var values = new List<string>(batch.Length);
+                var parameterIndex = 0;
 
                 foreach (var row in batch)
                 {
                     var parameterNames = new List<string>(mappedColumns.Length);
                     foreach (var (property, _) in mappedColumns)
                     {
-                        var parameterName = sqlHelper.GenerateParameterName($"p{command.Parameters.Count}");
-                        var parameter = command.CreateParameter();
-                        parameter.ParameterName = parameterName;
-
+                        var parameterName = $"p{parameterIndex++}";
                         object? value = property == tenantProperty
                             ? tenantId
                             : property == staleProperty
                                 ? true
                                 : GetPropertyValue(dbContext, row, property, entityType);
                         var converter = property.GetRelationalTypeMapping().Converter;
-                        parameter.Value = (converter is null ? value : converter.ConvertToProvider(value)) ?? DBNull.Value;
-                        command.Parameters.Add(parameter);
-                        parameterNames.Add(parameterName);
+                        parameters.Add(parameterName, converter is null ? value : converter.ConvertToProvider(value));
+                        parameterNames.Add($"@{parameterName}");
                     }
 
                     values.Add($"({string.Join(", ", parameterNames)})");
                 }
 
-                command.CommandText = $"INSERT INTO {quotedTable} ({insertColumns}) VALUES {string.Join(", ", values)} " +
+                var commandText = $"INSERT INTO {quotedTable} ({insertColumns}) VALUES {string.Join(", ", values)} " +
                     $"ON CONFLICT ({conflictColumns}) DO UPDATE SET {staleColumn} = TRUE";
-                await command.ExecuteNonQueryAsync(cancellationToken);
+                await connection.ExecuteAsync(new CommandDefinition(
+                    commandText,
+                    parameters,
+                    dbTransaction,
+                    cancellationToken: cancellationToken));
             }
 
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
@@ -135,7 +132,6 @@ internal static class PostgreSqlStaleUpsert
         finally
         {
             if (transaction is not null) await transaction.DisposeAsync();
-            if (ownsConnection) await connection.CloseAsync();
         }
     }
 
