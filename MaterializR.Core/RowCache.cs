@@ -181,7 +181,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
         });
     }
 
-    public async Task<TCacheEntity?> GetAsync(TTenantKey tenantId, TKey key, CancellationToken cancellationToken = default) => 
+    public async Task<TCacheEntity?> GetAsync(TTenantKey tenantId, TKey key, CancellationToken cancellationToken = default) =>
         await Util.LogDuration(Logger, async () =>
         {
             using var db = DbFactory.CreateDbContext();
@@ -200,7 +200,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
                 {
                     Logger.LogInformation("GetAsync: cache row {key} is stale, refreshing", key);
                 }
-                
+
                 var liveData = await QueryLiveAsync(db, tenantId, [key], cancellationToken);
                 if (liveData.Length == 1)
                 {

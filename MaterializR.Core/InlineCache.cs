@@ -9,7 +9,7 @@ namespace MaterializR.Core;
 /// defines caching strategy where cached data is saved on existing entities rather than a separate cache table
 /// </summary>
 public abstract class InlineCache<TDbContext, TEntity, TKey>(
-    ILogger<InlineCache<TDbContext, TEntity, TKey>> logger, 
+    ILogger<InlineCache<TDbContext, TEntity, TKey>> logger,
     IDbContextFactory<TDbContext> dbFactory)
     where TDbContext : DbContext
     where TEntity : class
@@ -17,8 +17,8 @@ public abstract class InlineCache<TDbContext, TEntity, TKey>(
 {
     protected readonly ILogger<InlineCache<TDbContext, TEntity, TKey>> Logger = logger;
     protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
-    protected abstract DbSet<TEntity> CacheDbSet(TDbContext db);    
-    protected abstract Expression<Func<TEntity, TKey>> KeySelector { get; }    
+    protected abstract DbSet<TEntity> CacheDbSet(TDbContext db);
+    protected abstract Expression<Func<TEntity, TKey>> KeySelector { get; }
 
     /// <summary>
     /// selects the writable mapped boolean stale property, for example, row => row.IsStale
@@ -55,7 +55,7 @@ public abstract class InlineCache<TDbContext, TEntity, TKey>(
 
                 if (Logger.IsEnabled(LogLevel.Debug))
                 {
-                    Logger.LogDebug("Found stale cache row for {table} key {Key}, updating from live data", typeof(TEntity).Name, key);                    
+                    Logger.LogDebug("Found stale cache row for {table} key {Key}, updating from live data", typeof(TEntity).Name, key);
                 }
 
                 // update the row with live data, but it's not necessary to persist as it will be done in the ExecuteUpdateAsync call next
