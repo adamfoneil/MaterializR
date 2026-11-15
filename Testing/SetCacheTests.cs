@@ -29,8 +29,8 @@ public sealed class SetCacheTests
         await db.SaveChangesAsync();
 
         var rollup = scope.ServiceProvider.GetRequiredService<PointsSetCache>();
-        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1, true);
-        await MarkStaleAsync(rollup, db, Tenant, baseDate, 0, true);
+        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1);
+        await MarkStaleAsync(rollup, db, Tenant, baseDate, 0);
         await rollup.UpdateAsync(Tenant);
 
         await AssertRollupMatchesLiveAsync(db, Tenant, baseDate, baseDate);
@@ -57,7 +57,7 @@ public sealed class SetCacheTests
         await db.SaveChangesAsync();
 
         var rollup = scope.ServiceProvider.GetRequiredService<PointsSetCache>();
-        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1, true);
+        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1);
         await rollup.UpdateAsync(Tenant);
 
         await db.Appointments
@@ -106,7 +106,7 @@ public sealed class SetCacheTests
         await db.SaveChangesAsync();
 
         var rollup = scope.ServiceProvider.GetRequiredService<PointsSetCache>();
-        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1, true);
+        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1);
         await rollup.UpdateAsync(Tenant);
 
         await db.Appointments
@@ -138,8 +138,8 @@ public sealed class SetCacheTests
         await db.SaveChangesAsync();
 
         var rollup = scope.ServiceProvider.GetRequiredService<PointsSetCache>();
-        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1, true);
-        await MarkStaleAsync(rollup, db, OtherTenant, baseDate, 1, true);
+        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1);
+        await MarkStaleAsync(rollup, db, OtherTenant, baseDate, 1);
 
         await rollup.UpdateAsync(Tenant);
 
@@ -171,20 +171,20 @@ public sealed class SetCacheTests
         await db.SaveChangesAsync();
 
         var rollup = scope.ServiceProvider.GetRequiredService<PointsSetCache>();
-        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1, true);
-        await MarkStaleAsync(rollup, db, OtherTenant, baseDate, 1, true);
+        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1);
+        await MarkStaleAsync(rollup, db, OtherTenant, baseDate, 1);
         await rollup.UpdateAsync(Tenant);
         await rollup.UpdateAsync(OtherTenant);
 
-        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1, false);
+        await MarkStaleAsync(rollup, db, Tenant, baseDate, 1);
 
         var rows = await db.PointsCache.AsNoTracking().ToArrayAsync();
         Assert.IsTrue(rows.Single(r => r.TenantId == Tenant).IsStale);
         Assert.IsFalse(rows.Single(r => r.TenantId == OtherTenant).IsStale);
     }
 
-    private static Task MarkStaleAsync(PointsSetCache rollup, ApplicationDbContext db, int tenantId, DateOnly date, int transportId, bool inserted) =>
-        rollup.MarkStaleDimensionsAsync(db, tenantId, [(inserted, new PointsCache.Dimensions(date, transportId))]);
+    private static Task MarkStaleAsync(PointsSetCache rollup, ApplicationDbContext db, int tenantId, DateOnly date, int transportId) =>
+        rollup.MarkStaleDimensionsAsync(db, tenantId, [new PointsCache.Dimensions(date, transportId)]);
 
     private static async Task<ApplicationDbContext> InitDbAsync(IServiceScope scope)
     {
