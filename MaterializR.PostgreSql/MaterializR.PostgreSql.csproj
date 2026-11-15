@@ -30,7 +30,7 @@
 
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.89" />
-    <PackageReference Include="EFCore.MaterializR" Version="1.1.61" />
+    <PackageReference Include="EFCore.MaterializR" Version="1.1.62" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
   </ItemGroup>
 
