@@ -37,15 +37,15 @@ public class ApplicationDbContext(
 
         var priceChanges = ChangeTracker.GetTouchedKeys(e => e switch
         {
-            Appointment a => ChangeTracker.InsertedKey(a, x => x.Id),
-            AppointmentItem ai => ChangeTracker.RelatedKey(ai, x => x.AppointmentId),
+            Appointment a => (true, a.Id),
+            AppointmentItem ai => (false, ai.AppointmentId),
             _ => (false, 0)
         });
         ChangeTracker.AcceptAllChanges();
 
-        await _pointsRollup.MarkStaleDimensionsAsync(this, tenantId, apptChanges);
+        await _pointsRollup.MarkStaleDimensionsAsync(this, tenantId, apptChanges, cancellationToken);
 
-        await _priceCache.MarkStaleKeysAsync(this, tenantId, priceChanges);
+        await _priceCache.MarkStaleKeysAsync(this, tenantId, priceChanges, cancellationToken);
 
         return result;
     }
