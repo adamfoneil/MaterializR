@@ -21,7 +21,7 @@ public class AppointmentPriceConfiguration : IEntityTypeConfiguration<Appointmen
     {
         builder.HasOne(ap => ap.Appointment).WithOne(a => a.Price).HasForeignKey<AppointmentPriceCache>(ap => ap.AppointmentId).OnDelete(DeleteBehavior.Cascade);
 
-        builder.HasKey(ap => ap.AppointmentId);
+        builder.HasKey(ap => new { ap.TenantId, ap.AppointmentId });
         builder.Property(ap => ap.TotalPrice).HasColumnType("decimal(18,2)");
     }
 }

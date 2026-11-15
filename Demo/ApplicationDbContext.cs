@@ -32,20 +32,20 @@ public class ApplicationDbContext(
         var apptChanges = ChangeTracker.GetTouchedDimensions<Appointment, PointsCache.Dimensions>(
             a => new PointsCache.Dimensions(a.Date, a.TransportId ?? 0));
 
-        // capture RowCache changes
+        // Save first so generated keys are available, while retaining entity states.
+        var result = await base.SaveChangesAsync(acceptAllChangesOnSuccess: false, cancellationToken);
+
         var priceChanges = ChangeTracker.GetTouchedKeys(e => e switch
         {
-            Appointment a => a.Id,
-            AppointmentItem ai => ai.AppointmentId,
+            Appointment a => ChangeTracker.CurrentKey(a, x => x.Id),
+            AppointmentItem ai => ChangeTracker.CurrentKey(ai, x => x.AppointmentId),
             _ => 0
         });
+        ChangeTracker.AcceptAllChanges();
 
-        // normal SaveChanges behavior
-        var result = await base.SaveChangesAsync(cancellationToken);
+        await _pointsRollup.MarkStaleDimensionsAsync(this, tenantId, apptChanges, cancellationToken);
 
-        await _pointsRollup.MarkStaleDimensionsAsync(this, tenantId, apptChanges);
-
-        await _priceCache.MarkStaleKeysAsync(this, tenantId, priceChanges);
+        await _priceCache.MarkStaleKeysAsync(this, tenantId, priceChanges, cancellationToken);
 
         return result;
     }
