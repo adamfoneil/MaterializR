@@ -6,11 +6,18 @@ What if you wanted a more generic approach that leverages native EF Core functio
 
 NuGet: [EFCore.MaterializR](https://www.nuget.org/packages/EFCore.MaterializR)
 
-MaterializR supports two kinds of cache table via abstract classes:
+MaterializR provides two cache-table abstractions and an inline cache abstraction:
 - [SetCache](MaterializR.Core/SetCache.cs) manages calculations based on sets of rows along one or more _dimensions_ with one or more _facts_. This kind of cache can be called a "rollup." An example would be total sales by region and year.
 - [RowCache](MaterializR.Core/RowCache.cs) manages calculations derived from a single row. An example would be the total price of line items on a sales order.
+- [InlineCache](MaterializR.Core/InlineCache.cs) stores cached values directly on existing entities instead of in a separate cache table.
 
-When you implement these abstract classes, inject them in your DbContext, then override the `SaveChanges` method, calling your SetCache and RowCache methods at a couple key points. See the walkthroughs below.
+When you implement `SetCache` or `RowCache`, inject them in your DbContext, then override the `SaveChanges` method, calling the cache methods at a couple key points. See the walkthroughs below.
+
+## InlineCache
+
+Use `InlineCache` when cached values belong on an existing entity. A derived class identifies the entity set, key, and mapped stale flag, and implements the live-data refresh. `GetAsync(key)` returns `null` when the row does not exist; for a stale row, it refreshes the values and clears the stale flag in a single database update. A fresh row is returned without a refresh. Call `MarkStaleKeysAsync` with the source DbContext when the relevant source data changes.
+
+The focused tests cover stale and fresh rows (including leaving other rows untouched), missing rows, and a failed refresh preserving the stale flag: [refresh behavior](Testing/InlineCacheTests.cs#L17), [missing row](Testing/InlineCacheTests.cs#L56), and [failed refresh](Testing/InlineCacheTests.cs#L68).
 
 ## Demo walkthrough
 
