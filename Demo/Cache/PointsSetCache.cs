@@ -118,4 +118,23 @@ public class PointsSetCache(
     };
 
     protected override PointsCache.Dimensions ToDimensions(PointsCache entity) => new(entity.Date, entity.TransportId);
+
+    protected override async Task UpsertStaleAsync(ApplicationDbContext dbContext, int tenantId, PointsCache[] rows, CancellationToken cancellationToken)
+    {
+        var dimensions = rows.Select(ToDimensions).ToHashSet();
+        var existingRows = await ExistingRowsAsync(dbContext, tenantId, [.. dimensions], cancellationToken);
+        var existingDimensions = existingRows.Select(ToDimensions).ToHashSet();
+
+        foreach (var existing in existingRows)
+        {
+            if (dimensions.Contains(ToDimensions(existing)))
+            {
+                existing.IsStale = true;
+                dbContext.Entry(existing).Property(row => row.IsStale).IsModified = true;
+            }
+        }
+
+        dbContext.PointsCache.AddRange(rows.Where(row => !existingDimensions.Contains(ToDimensions(row))));
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
 }

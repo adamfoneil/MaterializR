@@ -9,7 +9,7 @@ namespace Testing;
 public sealed class ChangeTrackerExtensionsTests
 {
     [TestMethod]
-    public void GetTouchedKeys_UsesSelectorFlagAndFiltersDefaultAndDuplicatePairs()
+    public void GetTouchedKeys_FiltersDefaultAndDuplicateKeys()
     {
         using var scope = TestServiceProvider.Services.CreateScope();
         using var db = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContext();
@@ -29,17 +29,17 @@ public sealed class ChangeTrackerExtensionsTests
 
         var keys = db.ChangeTracker.GetTouchedKeys(entity => entity switch
         {
-            Appointment a => (a.Id is 1 or 2, a.Id),
-            AppointmentItem item => (false, item.AppointmentId),
-            _ => (false, 0)
+            Appointment a => a.Id,
+            AppointmentItem item => item.AppointmentId,
+            _ => 0
         });
 
         CollectionAssert.AreEquivalent(
-            new[] { (true, 1), (false, 1), (true, 2), (false, 3) }, keys);
+            new[] { 1, 2, 3 }, keys);
     }
 
     [TestMethod]
-    public void KeyHelpers_UseTrackedStateAndRelatedKeys()
+    public void GetTouchedKeys_UsesValuesFromTrackedEntities()
     {
         using var scope = TestServiceProvider.Services.CreateScope();
         using var db = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContext();
@@ -54,11 +54,33 @@ public sealed class ChangeTrackerExtensionsTests
 
         var keys = db.ChangeTracker.GetTouchedKeys(entity => entity switch
         {
-            Appointment a => db.ChangeTracker.InsertedKey(a, x => x.Id),
-            AppointmentItem i => db.ChangeTracker.RelatedKey(i, x => x.AppointmentId),
-            _ => (false, 0)
+            Appointment a => a.Id,
+            AppointmentItem i => i.AppointmentId,
+            _ => 0
         });
 
-        CollectionAssert.AreEquivalent(new[] { (true, 1), (false, 2), (false, 3) }, keys);
+        CollectionAssert.AreEquivalent(new[] { 1, 2, 3 }, keys);
+    }
+
+    [TestMethod]
+    public void GetTouchedDimensions_ReturnsDistinctCurrentAndOriginalDimensions()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        using var db = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContext();
+        var oldDate = new DateOnly(2026, 1, 1);
+        var newDate = new DateOnly(2026, 1, 2);
+        var modified = new Appointment { Id = 1, Date = oldDate, TransportId = 3 };
+        var added = new Appointment { Id = 2, Date = newDate, TransportId = 3 };
+        db.Attach(modified);
+        db.Entry(modified).Property(appointment => appointment.Date).CurrentValue = newDate;
+        db.Entry(modified).Property(appointment => appointment.Date).IsModified = true;
+        db.Add(added);
+
+        var dimensions = db.ChangeTracker.GetTouchedDimensions<Appointment, PointsCache.Dimensions>(
+            appointment => new(appointment.Date, appointment.TransportId ?? 0));
+
+        CollectionAssert.AreEquivalent(
+            new[] { new PointsCache.Dimensions(oldDate, 3), new PointsCache.Dimensions(newDate, 3) },
+            dimensions);
     }
 }
