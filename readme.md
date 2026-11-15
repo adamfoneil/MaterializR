@@ -31,9 +31,9 @@ Caches are tenant-isolated by design. `RowCache` and `SetCache` take a tenant ke
 
 In [ApplicationDbContext](Demo/ApplicationDbContext.cs):
 - For SetCache: `ChangeTracker.GetTouchedDimensions` maps appointment changes to `PointsCache.Dimensions`, then those dimensions are passed to `PointsCacheConfiguration.MarkStaleDimensionsAsync`.
-- For RowCache: `ChangeTracker.GetTouchedKeys` maps Appointment and AppointmentItem changes to appointment IDs, then those keys are passed to `AppointmentPriceCacheConfiguration.MarkStaleKeysAsync`.
+- For RowCache: `ChangeTracker.GetTouchedKeys` maps Appointment and AppointmentItem changes to `(Inserted, Key)` pairs, then those keys are passed to `AppointmentPriceCacheConfiguration.MarkStaleKeysAsync`. `Inserted` means a new cache row is needed: an added appointment qualifies, but an added item only makes its existing appointment's cache row stale. Default keys are ignored.
 
-This keeps writes fast: no heavy recompute during the transaction that inserts/updates appointments.
+This keeps writes fast: no heavy recompute during the transaction that inserts/updates appointments. The example collects keys after saving so database-generated IDs are available, retaining the entity states until after the selector runs. `InsertedKey` and `RelatedKey` read a mapped property's EF-tracked value before changes are accepted. Use `InsertedKey` when an added entity needs a new cache row; `RelatedKey` always marks the key as updated, including when a related entity is added. For other rules, return an `(Inserted, Key)` pair directly.
 
 The tenant is passed explicitly through a `SaveChangesAsync` overload, so there is no ambient tenant state. Callers that use the ordinary `SaveChanges`/`SaveChangesAsync` methods would skip marking cache rows stale. How you prevent that is up to you; for example, override the parameterless methods to throw `NotSupportedException`.
 
@@ -48,17 +48,17 @@ public async Task<int> SaveChangesAsync(int tenantId, CancellationToken cancella
     var apptChanges = ChangeTracker.GetTouchedDimensions<Appointment, PointsCache.Dimensions>(
         a => new PointsCache.Dimensions(a.Date, a.TransportId ?? 0));
 
-    // capture RowCache changes
+    // Save first so generated keys are available, while retaining entity states.
+    var result = await base.SaveChangesAsync(acceptAllChangesOnSuccess: false, cancellationToken);
+
     var priceChanges = ChangeTracker.GetTouchedKeys(e => e switch
     {
-        Appointment a => a.Id,
-        AppointmentItem ai => ai.AppointmentId,
-        _ => 0
+        Appointment a => ChangeTracker.InsertedKey(a, x => x.Id),
+        AppointmentItem ai => ChangeTracker.RelatedKey(ai, x => x.AppointmentId),
+        _ => (false, 0)
     });
+    ChangeTracker.AcceptAllChanges();
 
-    // normal SaveChanges behavior
-    var result = await base.SaveChangesAsync(cancellationToken);
-    
     await _pointsRollup.MarkStaleDimensionsAsync(this, tenantId, apptChanges);
     await _priceCache.MarkStaleKeysAsync(this, tenantId, priceChanges);
 

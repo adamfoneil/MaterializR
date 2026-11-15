@@ -1,16 +1,38 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using System.Linq.Expressions;
 
 namespace MaterializR.Core;
 
 public static class ChangeTrackerExtensions
 {
-    public static (bool Inserted, TKey Key)[] GetTouchedKeys<TKey>(this ChangeTracker changeTracker, Func<object, TKey> selector) =>
+    public static (bool Inserted, TKey Key)[] GetTouchedKeys<TKey>(this ChangeTracker changeTracker, Func<object, (bool Inserted, TKey Key)> selector) =>
         [.. changeTracker.Entries()
             .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
-            .Select(e => (e.State == EntityState.Added, selector(e.Entity)))
+            .Select(e => selector(e.Entity))
             .Distinct()
-            .Where(val => !EqualityComparer<TKey>.Default.Equals(val.Item2, default))];
+            .Where(val => !EqualityComparer<TKey>.Default.Equals(val.Key, default))];
+
+    /// <summary>
+    /// Selects a mapped property's tracked value, marking the source inserted when the entity is added.
+    /// Call before accepting changes to preserve the entity state and store-generated values.
+    /// </summary>
+    public static (bool Inserted, TKey Key) InsertedKey<TEntity, TKey>(
+        this ChangeTracker changeTracker, TEntity entity, Expression<Func<TEntity, TKey>> key)
+        where TEntity : class
+    {
+        var entry = changeTracker.Context.Entry(entity);
+        return (entry.State == EntityState.Added, entry.Property(key).CurrentValue);
+    }
+
+    /// <summary>
+    /// Selects a mapped property's tracked value from a related entity, marking the source as updated.
+    /// Call before accepting changes to retain store-generated values.
+    /// </summary>
+    public static (bool Inserted, TKey Key) RelatedKey<TEntity, TKey>(
+        this ChangeTracker changeTracker, TEntity entity, Expression<Func<TEntity, TKey>> key)
+        where TEntity : class =>
+        (false, changeTracker.Context.Entry(entity).Property(key).CurrentValue);
 
     public static (bool Inserted, TDimensions Dimensions)[] GetTouchedDimensions<TEntity, TDimensions>(
         this ChangeTracker changeTracker,

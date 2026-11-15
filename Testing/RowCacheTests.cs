@@ -13,6 +13,41 @@ public sealed class RowCacheTests
     private const int OtherTenant = 2;
 
     [TestMethod]
+    public async Task SaveChanges_WithNewAppointmentAndItems_TracksGeneratedKeyAndLaterItemInsert()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
+        var appointment = NewAppointment(Tenant, 10m);
+        db.Appointments.Add(appointment);
+
+        await db.SaveChangesAsync(Tenant);
+
+        Assert.AreNotEqual(0, appointment.Id);
+        var created = await db.AppointmentPrices.AsNoTracking().SingleAsync();
+        Assert.AreEqual(appointment.Id, created.AppointmentId);
+        Assert.IsTrue(created.IsStale);
+
+        await cache.UpdateAsync(Tenant);
+        db.AppointmentItems.Add(new AppointmentItem
+        {
+            AppointmentId = appointment.Id,
+            ItemId = 2,
+            Quantity = 1,
+            UnitPrice = 7m
+        });
+        await db.SaveChangesAsync(Tenant);
+
+        var marked = await db.AppointmentPrices.AsNoTracking().SingleAsync();
+        Assert.AreEqual(appointment.Id, marked.AppointmentId);
+        Assert.IsTrue(marked.IsStale);
+        await cache.UpdateAsync(Tenant);
+        var refreshed = await db.AppointmentPrices.AsNoTracking().SingleAsync();
+        Assert.AreEqual(27m, refreshed.TotalPrice);
+        Assert.IsFalse(refreshed.IsStale);
+    }
+
+    [TestMethod]
     public async Task InsertedRows_PopulateAppointmentPriceCache()
     {
         using var scope = TestServiceProvider.Services.CreateScope();
