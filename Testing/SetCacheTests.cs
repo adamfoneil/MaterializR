@@ -183,8 +183,8 @@ public sealed class SetCacheTests
         Assert.IsFalse(rows.Single(r => r.TenantId == OtherTenant).IsStale);
     }
 
-    private static Task MarkStaleAsync(PointsSetCache rollup, ApplicationDbContext db, int tenantId, DateOnly date, int transportId, bool inserted) =>
-        rollup.MarkStaleDimensionsAsync(db, tenantId, [(inserted, new PointsCache.Dimensions(date, transportId))]);
+    private static async Task MarkStaleAsync(PointsSetCache rollup, ApplicationDbContext db, int tenantId, DateOnly date, int transportId, bool inserted) =>
+        await rollup.MarkStaleDimensionsAsync(db, tenantId, [(inserted, new PointsCache.Dimensions(date, transportId))]);
 
     private static async Task<ApplicationDbContext> InitDbAsync(IServiceScope scope)
     {
