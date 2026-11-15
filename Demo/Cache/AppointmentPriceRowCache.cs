@@ -36,4 +36,22 @@ public class AppointmentPriceRowCache(
     protected override AppointmentPriceCache FromKey(int key) => new() { AppointmentId = key };
 
     protected override DbSet<AppointmentPriceCache> CacheDbSet(ApplicationDbContext db) => db.AppointmentPrices;
+
+    protected override async Task UpsertStaleAsync(ApplicationDbContext dbContext, int tenantId, AppointmentPriceCache[] rows, CancellationToken cancellationToken)
+    {
+        var keys = rows.Select(row => row.AppointmentId).ToHashSet();
+        var existingRows = await dbContext.AppointmentPrices
+            .Where(row => row.TenantId == tenantId && keys.Contains(row.AppointmentId))
+            .ToArrayAsync(cancellationToken);
+        var existingKeys = existingRows.Select(row => row.AppointmentId).ToHashSet();
+
+        foreach (var existing in existingRows)
+        {
+            existing.IsStale = true;
+            dbContext.Entry(existing).Property(row => row.IsStale).IsModified = true;
+        }
+
+        dbContext.AppointmentPrices.AddRange(rows.Where(row => !existingKeys.Contains(row.AppointmentId)));
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
 }

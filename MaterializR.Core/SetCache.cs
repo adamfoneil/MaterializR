@@ -3,8 +3,6 @@ using Microsoft.Extensions.Logging;
 
 namespace MaterializR.Core;
 
-public record DimensionChangesResult(int Inserted, int Updated);
-
 /// <summary>
 /// caches rollups over sets of rows along dimensions, isolated per tenant
 /// </summary>
@@ -21,6 +19,8 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
     protected readonly IDbContextFactory<TDbContext> DbFactory = dbFactory;
 
     protected abstract DbSet<TCacheEntity> CacheDbSet(TDbContext db);
+
+    protected abstract Task UpsertStaleAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] rows, CancellationToken cancellationToken);
 
     /// <summary>
     /// create a new cache row for a set of dimensions. <see cref="ITenantCacheEntity{TTenantKey}.TenantId"/> is set for you
@@ -84,51 +84,26 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
     /// <summary>
     /// flag dimensions as modified, inserting where they don't exist
     /// </summary>
-    public async Task<DimensionChangesResult> MarkStaleDimensionsAsync(TDbContext dbContext, TTenantKey tenantId, (bool Inserted, TCacheDimensions Dimensions)[] changes, CancellationToken cancellationToken = default)
+    public async Task MarkStaleDimensionsAsync(TDbContext dbContext, TTenantKey tenantId, TCacheDimensions[] dimensions, CancellationToken cancellationToken = default)
     {
-        if (!changes.Any()) return new(0, 0);
+        if (!dimensions.Any()) return;
 
-        return await Util.LogDuration(Logger, async () =>
+        await Util.LogDuration(Logger, async () =>
         {
             if (Logger.IsEnabled(LogLevel.Information))
             {
-                var logDetail = string.Join(", ", changes.GroupBy(c => c.Inserted).Select(g => $"{(g.Key ? "Inserted" : "Updated")}: {string.Join(", ", g.Select(c => c.Dimensions))}"));
-                Logger.LogInformation("Marking stale dimensions for tenant {tenantId}: {dimensions}", tenantId, logDetail);
+                Logger.LogInformation("Marking stale dimensions for tenant {tenantId}: {dimensions}", tenantId, string.Join(", ", dimensions));
             }
 
-            foreach (var (_, dim) in changes.Where(d => d.Inserted).Distinct())
+            var rows = dimensions.Distinct().Select(dim =>
             {
                 var row = FromDimensions(dim);
                 row.TenantId = tenantId;
-                CacheDbSet(dbContext).Add(row);
-            }
+                row.IsStale = true;
+                return row;
+            }).ToArray();
 
-            var modifiedDimensions = changes
-                .Where(d => !d.Inserted)
-                .Select(d => d.Dimensions)
-                .Distinct()
-                .ToArray();
-
-            if (modifiedDimensions.Length > 0)
-            {
-                var modifiedLookup = modifiedDimensions.ToHashSet();
-                var existingRows = await ExistingRowsAsync(dbContext, tenantId, modifiedDimensions, cancellationToken);
-
-                foreach (var entity in existingRows)
-                {
-                    if (modifiedLookup.Contains(ToDimensions(entity)))
-                    {
-                        entity.IsStale = true;
-                        dbContext.Entry(entity).Property(nameof(ICacheEntity.IsStale)).IsModified = true;
-                    }
-                }
-            }
-
-            await dbContext.SaveChangesAsync(cancellationToken);
-
-            return new DimensionChangesResult(
-                Inserted: changes.Count(d => d.Inserted),
-                Updated: changes.Count(d => !d.Inserted));
+            await UpsertStaleAsync(dbContext, tenantId, rows, cancellationToken);
         });
     }
 

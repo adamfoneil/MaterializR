@@ -22,7 +22,7 @@ The [Demo](Demo) project shows how cache rows are marked stale inside `SaveChang
 ## Tenant isolation
 
 Caches are tenant-isolated by design. `RowCache` and `SetCache` take a tenant key type parameter (`TTenantKey : notnull`), and every operation takes an explicit `tenantId`:
-- `MarkStaleKeysAsync(db, tenantId, keys)` and `MarkStaleDimensionsAsync(db, tenantId, changes)` only create or flag rows of that tenant.
+- `MarkStaleKeysAsync(db, tenantId, keys)` and `MarkStaleDimensionsAsync(db, tenantId, dimensions)` upsert stale rows only for that tenant. Both return `Task`; they do not report insert/update counts.
 - `UpdateAsync(tenantId)` only refreshes stale rows of that tenant. There is no "all tenants" overload; loop over tenants if you need that (for example in a background job).
 - Source entities need no tenant property. The tenant is never inferred from the ChangeTracker, so child entities such as `AppointmentItem` don't need one.
 - If you override `SetCache.ExistingRowsAsync`, restrict the results to `tenantId`.
@@ -31,9 +31,9 @@ Caches are tenant-isolated by design. `RowCache` and `SetCache` take a tenant ke
 
 In [ApplicationDbContext](Demo/ApplicationDbContext.cs):
 - For SetCache: `ChangeTracker.GetTouchedDimensions` maps appointment changes to `PointsCache.Dimensions`, then those dimensions are passed to `PointsCacheConfiguration.MarkStaleDimensionsAsync`.
-- For RowCache: `ChangeTracker.GetTouchedKeys` maps Appointment and AppointmentItem changes to `(Inserted, Key)` pairs, then those keys are passed to `AppointmentPriceCacheConfiguration.MarkStaleKeysAsync`. `Inserted` means a new cache row is needed: an added appointment qualifies, but an added item only makes its existing appointment's cache row stale. Default keys are ignored.
+- For RowCache: `ChangeTracker.GetTouchedKeys` maps Appointment and AppointmentItem changes to keys, then those keys are passed to `AppointmentPriceCacheConfiguration.MarkStaleKeysAsync`. A source insert does not imply a new cache row; the cache implementation upserts each identity. Default keys are ignored.
 
-This keeps writes fast: no heavy recompute during the transaction that inserts/updates appointments. The example collects keys after saving so database-generated IDs are available, retaining the entity states until after the selector runs. `InsertedKey` and `RelatedKey` read a mapped property's EF-tracked value before changes are accepted. Use `InsertedKey` when an added entity needs a new cache row; `RelatedKey` always marks the key as updated, including when a related entity is added. For other rules, return an `(Inserted, Key)` pair directly.
+This keeps writes fast: no heavy recompute during the transaction that inserts/updates appointments. The example collects keys after saving so database-generated IDs are available, retaining the entity states until after the selector runs. `ChangeTracker.CurrentKey` reads EF's current tracked value, including generated values when changes have not yet been accepted.
 
 The tenant is passed explicitly through a `SaveChangesAsync` overload, so there is no ambient tenant state. Callers that use the ordinary `SaveChanges`/`SaveChangesAsync` methods would skip marking cache rows stale. How you prevent that is up to you; for example, override the parameterless methods to throw `NotSupportedException`.
 
@@ -53,9 +53,9 @@ public async Task<int> SaveChangesAsync(int tenantId, CancellationToken cancella
 
     var priceChanges = ChangeTracker.GetTouchedKeys(e => e switch
     {
-        Appointment a => ChangeTracker.InsertedKey(a, x => x.Id),
-        AppointmentItem ai => ChangeTracker.RelatedKey(ai, x => x.AppointmentId),
-        _ => (false, 0)
+        Appointment a => ChangeTracker.CurrentKey(a, x => x.Id),
+        AppointmentItem ai => ChangeTracker.CurrentKey(ai, x => x.AppointmentId),
+        _ => 0
     });
     ChangeTracker.AcceptAllChanges();
 
@@ -65,6 +65,12 @@ public async Task<int> SaveChangesAsync(int tenantId, CancellationToken cancella
     return result;
 }
 ```
+
+`MarkStaleKeysAsync`, `MarkStaleDimensionsAsync`, and `MarkStaleWhereAsync` return `Task`. Their inputs describe source changes, not actual cache inserts or updates, so they do not report row counts.
+
+## PostgreSQL
+
+Reference [MaterializR.PostgreSql](MaterializR.PostgreSql) for abstract PostgreSQL cache bases. Their stale-row upserts use `INSERT ... ON CONFLICT ... DO UPDATE` and require a unique key or index on the tenant column plus the non-nullable cache key/dimension columns. On conflict, only `IsStale` is changed; cached facts are preserved. The PostgreSQL bases take the key/dimension property selector used to identify that unique constraint. They use EF relational table/column metadata and the supplied context's connection and active transaction.
 
 ### 2. UpdateAsync recomputes only stale rows
 

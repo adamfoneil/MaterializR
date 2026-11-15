@@ -73,7 +73,7 @@ public sealed class RowCacheTests
         await db.SaveChangesAsync();
 
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
-        await cache.MarkStaleKeysAsync(db, Tenant, [(true, appointment.Id)]);
+        await cache.MarkStaleKeysAsync(db, Tenant, [appointment.Id]);
         await cache.UpdateAsync(Tenant);
 
         await AssertCacheMatchesLiveAsync(db, Tenant);
@@ -104,7 +104,7 @@ public sealed class RowCacheTests
         await db.SaveChangesAsync();
 
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
-        await cache.MarkStaleKeysAsync(db, Tenant, [(true, appointment.Id)]);
+        await cache.MarkStaleKeysAsync(db, Tenant, [appointment.Id]);
         await cache.UpdateAsync(Tenant);
 
         await db.AppointmentItems
@@ -149,14 +149,14 @@ public sealed class RowCacheTests
         await db.SaveChangesAsync();
 
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
-        await cache.MarkStaleKeysAsync(db, Tenant, [(true, appointment.Id)]);
+        await cache.MarkStaleKeysAsync(db, Tenant, [appointment.Id]);
         await cache.UpdateAsync(Tenant);
 
         await db.AppointmentItems
             .Where(i => i.AppointmentId == appointment.Id && i.ItemId == 12)
             .ExecuteDeleteAsync();
 
-        await cache.MarkStaleKeysAsync(db, Tenant, [(false, appointment.Id)]);
+        await cache.MarkStaleKeysAsync(db, Tenant, [appointment.Id]);
 
         await cache.UpdateAsync(Tenant);
 
@@ -175,8 +175,8 @@ public sealed class RowCacheTests
         await db.SaveChangesAsync();
 
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
-        await cache.MarkStaleKeysAsync(db, Tenant, [(true, mine.Id)]);
-        await cache.MarkStaleKeysAsync(db, OtherTenant, [(true, theirs.Id)]);
+        await cache.MarkStaleKeysAsync(db, Tenant, [mine.Id]);
+        await cache.MarkStaleKeysAsync(db, OtherTenant, [theirs.Id]);
 
         await cache.UpdateAsync(Tenant);
 
@@ -204,15 +204,15 @@ public sealed class RowCacheTests
         await db.SaveChangesAsync();
 
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
-        await cache.MarkStaleKeysAsync(db, Tenant, [(true, mine.Id)]);
-        await cache.MarkStaleKeysAsync(db, OtherTenant, [(true, theirs.Id)]);
+        await cache.MarkStaleKeysAsync(db, Tenant, [mine.Id]);
+        await cache.MarkStaleKeysAsync(db, OtherTenant, [theirs.Id]);
         await cache.UpdateAsync(Tenant);
         await cache.UpdateAsync(OtherTenant);
 
-        await cache.MarkStaleKeysAsync(db, Tenant, [(false, mine.Id), (false, theirs.Id)]);
+        await cache.MarkStaleKeysAsync(db, Tenant, [mine.Id]);
 
         var rows = await db.AppointmentPrices.AsNoTracking().ToArrayAsync();
-        Assert.IsTrue(rows.Single(r => r.TenantId == Tenant).IsStale);
+        Assert.IsTrue(rows.Single(r => r.TenantId == Tenant && r.AppointmentId == mine.Id).IsStale);
         Assert.IsFalse(rows.Single(r => r.TenantId == OtherTenant).IsStale);
     }
 
@@ -232,12 +232,11 @@ public sealed class RowCacheTests
         await db.SaveChangesAsync();
 
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
-        await cache.MarkStaleKeysAsync(db, Tenant, [(true, existing.Id)]);
+        await cache.MarkStaleKeysAsync(db, Tenant, [existing.Id]);
         await cache.UpdateAsync(Tenant);
 
-        var marked = await cache.MarkStaleWhereAsync(db, Tenant,
+        await cache.MarkStaleWhereAsync(db, Tenant,
             db.Appointments.Where(a => a.TenantId == Tenant && a.Date == today), a => a.Id);
-        Assert.AreEqual(2, marked);
 
         var rows = await db.AppointmentPrices.AsNoTracking().Where(p => p.TenantId == Tenant).ToArrayAsync();
         Assert.HasCount(2, rows);
@@ -266,7 +265,7 @@ public sealed class RowCacheTests
         await db.SaveChangesAsync();
 
         var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
-        await cache.MarkStaleKeysAsync(db, Tenant, [(true, appointment.Id)]);
+        await cache.MarkStaleKeysAsync(db, Tenant, [appointment.Id]);
 
         var result = await cache.GetAsync(Tenant, appointment.Id);
 

@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Demo\Demo.csproj" />
+    <ProjectReference Include="..\MaterializR.PostgreSql\MaterializR.PostgreSql.csproj" />
   </ItemGroup>
 
   <ItemGroup>

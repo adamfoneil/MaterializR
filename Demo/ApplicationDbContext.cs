@@ -37,9 +37,9 @@ public class ApplicationDbContext(
 
         var priceChanges = ChangeTracker.GetTouchedKeys(e => e switch
         {
-            Appointment a => (true, a.Id),
-            AppointmentItem ai => (false, ai.AppointmentId),
-            _ => (false, 0)
+            Appointment a => ChangeTracker.CurrentKey(a, x => x.Id),
+            AppointmentItem ai => ChangeTracker.CurrentKey(ai, x => x.AppointmentId),
+            _ => 0
         });
         ChangeTracker.AcceptAllChanges();
 
