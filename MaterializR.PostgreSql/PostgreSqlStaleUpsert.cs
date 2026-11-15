@@ -31,8 +31,8 @@ internal static class PostgreSqlStaleUpsert
             ?? throw new InvalidOperationException($"Entity type {typeof(TCacheEntity).Name} is not mapped to a table.");
         var schema = entityType.GetSchema();
         var table = StoreObjectIdentifier.Table(tableName, schema);
-        var tenantProperty = entityType.FindProperty(nameof(ITenantCacheEntity<TTenantKey>.TenantId))
-            ?? throw new InvalidOperationException($"The {nameof(ITenantCacheEntity<TTenantKey>.TenantId)} property is not mapped.");
+        var tenantProperty = entityType.FindProperty(nameof(ITenantCacheEntity<>.TenantId))
+            ?? throw new InvalidOperationException($"The {nameof(ITenantCacheEntity<>.TenantId)} property is not mapped.");
         var staleProperty = entityType.FindProperty(nameof(ICacheEntity.IsStale))
             ?? throw new InvalidOperationException($"The {nameof(ICacheEntity.IsStale)} property is not mapped.");
 
