@@ -28,7 +28,7 @@ public class ApplicationDbContext(
     /// </summary>
     public async Task<int> SaveChangesAsync(int tenantId, CancellationToken cancellationToken = default)
     {
-        // capture SetCache changes
+        // capture SetCache changes, doesn't depend on any inserted PK values, so can be done before SaveChanges
         var apptChanges = ChangeTracker.GetTouchedDimensions<Appointment, PointsCache.Dimensions>(
             a => new PointsCache.Dimensions(a.Date, a.TransportId ?? 0));
 
