@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Logging;
 using System.Linq.Expressions;
 
@@ -39,6 +40,11 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
 
     protected virtual async Task MergeAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] liveData, CancellationToken cancellationToken)
     {
+        if (Logger.IsEnabled(LogLevel.Debug))
+        {
+            Logger.LogDebug("Merging {count} live rows for tenant {tenantId}, row data: {keys}", liveData.Length, tenantId, string.Join(", ", liveData.Select(KeySelector.Compile())));
+        }
+
         var keySelector = KeySelector.Compile();
         var incomingByKey = liveData
             .GroupBy(keySelector)
@@ -69,6 +75,12 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
         {
             foreach (var row in incomingByKey.Values) row.TenantId = tenantId;
             CacheDbSet(dbContext).AddRange(incomingByKey.Values);
+        }
+
+        if (Logger.IsEnabled(LogLevel.Debug))
+        {
+            Func<DebugView, string> changeTrackerDetail = Logger.IsEnabled(LogLevel.Trace) ? (DebugView dv) => $"Long view: {dv.LongView}" : (DebugView dv) => $"Short view: {dv.ShortView}";
+            Logger.LogDebug("Merging changes: {detail}", changeTrackerDetail.Invoke(dbContext.ChangeTracker.DebugView));
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);

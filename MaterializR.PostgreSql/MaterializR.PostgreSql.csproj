@@ -15,6 +15,7 @@
     <PackageProjectUrl>https://github.com/adamfoneil/MaterializR</PackageProjectUrl>
     <RepositoryUrl>https://github.com/adamfoneil/MaterializR</RepositoryUrl>
     <PackageReadmeFile>readme.md</PackageReadmeFile>
+	<ReleaseNotes>More debug-level logging</ReleaseNotes>
     <PackageTags>caching; efcore; materialize-framework; postgresql</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
 	<IncludeSymbols>True</IncludeSymbols>
