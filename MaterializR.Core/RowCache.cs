@@ -93,6 +93,11 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
                 return row;
             }).ToArray();
 
+            if (Logger.IsEnabled(LogLevel.Debug))
+            {
+                Logger.LogDebug("Upserting {count} stale rows for tenant {tenantId}, keys: {keys}", rows.Length, tenantId, string.Join(", ", keys.Distinct()));
+            }
+
             await UpsertStaleAsync(dbContext, tenantId, rows, cancellationToken);
         });
     }
@@ -111,6 +116,11 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
         {
             var keys = await query.Select(sourceKey).Distinct().ToArrayAsync(cancellationToken);
             if (keys.Length == 0) return;
+
+            if (Logger.IsEnabled(LogLevel.Debug))
+            {
+                Logger.LogDebug("Upserting {count} stale rows for tenant {tenantId}, keys: {keys}", keys.Length, tenantId, string.Join(", ", keys));
+            }
 
             var ownsTransaction = dbContext.Database.CurrentTransaction is null;
             await using var txn = ownsTransaction ? await dbContext.Database.BeginTransactionAsync(cancellationToken) : null;
