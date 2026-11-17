@@ -255,6 +255,51 @@ public sealed class RowCacheTests
     }
 
     [TestMethod]
+    [DataRow(false, true)]
+    [DataRow(true, true)]
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    public async Task UpdateAsync_PersistsFactsRegardlessOfTrackingConfiguration(bool noTracking, bool autoDetectChanges)
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var appointment = NewAppointment(Tenant, 10m);
+        db.Appointments.Add(appointment);
+        await db.SaveChangesAsync();
+
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+        var logger = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppointmentPriceRowCache>>();
+        var cache = new AppointmentPriceRowCache(logger, new ConfiguredContextFactory(factory, noTracking, autoDetectChanges));
+        await cache.MarkStaleKeysAsync(db, Tenant, [appointment.Id]);
+        Assert.AreEqual(1, await cache.UpdateAsync(Tenant));
+
+        var initial = await db.AppointmentPrices.AsNoTracking().SingleAsync();
+        Assert.AreEqual(20m, initial.TotalPrice);
+        Assert.IsFalse(initial.IsStale);
+
+        await db.AppointmentItems.Where(item => item.AppointmentId == appointment.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.UnitPrice, 25m));
+        await cache.MarkStaleKeysAsync(db, Tenant, [appointment.Id]);
+        Assert.AreEqual(1, await cache.UpdateAsync(Tenant));
+
+        var refreshed = await db.AppointmentPrices.AsNoTracking().SingleAsync();
+        Assert.AreEqual(50m, refreshed.TotalPrice);
+        Assert.IsFalse(refreshed.IsStale);
+    }
+
+    private sealed class ConfiguredContextFactory(
+        IDbContextFactory<ApplicationDbContext> inner, bool noTracking, bool autoDetectChanges) : IDbContextFactory<ApplicationDbContext>
+    {
+        public ApplicationDbContext CreateDbContext()
+        {
+            var db = inner.CreateDbContext();
+            db.ChangeTracker.QueryTrackingBehavior = noTracking ? QueryTrackingBehavior.NoTracking : QueryTrackingBehavior.TrackAll;
+            db.ChangeTracker.AutoDetectChangesEnabled = autoDetectChanges;
+            return db;
+        }
+    }
+
+    [TestMethod]
     public async Task GetAsync_RefreshesStaleAppointmentPrice()
     {
         using var scope = TestServiceProvider.Services.CreateScope();

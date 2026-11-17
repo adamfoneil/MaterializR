@@ -51,6 +51,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
             .ToDictionary(g => g.Key, g => g.Last());
 
         var staleRows = await CacheDbSet(dbContext)
+            .AsTracking()
             .ForTenant(tenantId)
             .Where(row => row.IsStale)
             .ToArrayAsync(cancellationToken);
@@ -76,6 +77,8 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
             foreach (var row in incomingByKey.Values) row.TenantId = tenantId;
             CacheDbSet(dbContext).AddRange(incomingByKey.Values);
         }
+
+        dbContext.ChangeTracker.DetectChanges();
 
         if (Logger.IsEnabled(LogLevel.Debug))
         {
