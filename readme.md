@@ -19,7 +19,7 @@ Use `InlineCache` when cached values belong on an existing entity. A derived cla
 
 The focused tests cover stale and fresh rows (including leaving other rows untouched), missing rows, and a failed refresh preserving the stale flag: [refresh behavior](Testing/InlineCacheTests.cs#L17), [missing row](Testing/InlineCacheTests.cs#L56), and [failed refresh](Testing/InlineCacheTests.cs#L68).
 
-The [Testing](Testing) project runs SQLite-based tests through the demo's SQLite reference. [Testing.PostgreSql](Testing.PostgreSql) contains the PostgreSQL integration tests; set `MATERIALIZR_POSTGRESQL` to a disposable database to run them. The integration tests drop and recreate their test tables.
+The [Testing](Testing) project runs SQLite-based tests through the demo's SQLite reference. [Testing.PostgreSql](Testing.PostgreSql) contains the PostgreSQL integration tests. Start Docker Desktop before running them; Testcontainers starts a disposable PostgreSQL container and removes it afterward. The first run downloads the PostgreSQL image if needed.
 
 ## Demo walkthrough
 
@@ -34,7 +34,6 @@ Caches are tenant-isolated by design. `RowCache` and `SetCache` take a tenant ke
 - `MarkStaleKeysAsync(db, tenantId, keys)` and `MarkStaleDimensionsAsync(db, tenantId, dimensions)` upsert stale rows only for that tenant. Both return `Task`; they do not report insert/update counts.
 - `UpdateAsync(tenantId)` only refreshes stale rows of that tenant. There is no "all tenants" overload; loop over tenants if you need that (for example in a background job).
 - Source entities need no tenant property. The tenant is never inferred from the ChangeTracker, so child entities such as `AppointmentItem` don't need one.
-- If you override `SetCache.ExistingRowsAsync`, restrict the results to `tenantId`.
 
 ### 1. SaveChanges marks cache rows as stale
 
@@ -79,11 +78,11 @@ public async Task<int> SaveChangesAsync(int tenantId, CancellationToken cancella
 
 ## PostgreSQL
 
-Reference [MaterializR.PostgreSql](MaterializR.PostgreSql) for abstract PostgreSQL cache bases. Their stale-row upserts use `INSERT ... ON CONFLICT ... DO UPDATE` and require a unique key or index on the tenant column plus the non-nullable cache key/dimension columns. On conflict, only `IsStale` is changed; cached facts are preserved. The PostgreSQL bases take the key/dimension property selector used to identify that unique constraint. They use EF relational table/column metadata and the supplied context's connection and active transaction.
+Reference [MaterializR.PostgreSql](MaterializR.PostgreSql) for abstract PostgreSQL cache bases. Both marking stale and refreshing use `INSERT ... ON CONFLICT ... DO UPDATE` and require a unique key or index on the tenant column plus the non-nullable cache key/dimension columns. Marking preserves existing facts; refresh replaces the properties selected by `FactProperties` and clears `IsStale`. Refresh writes the selected values directly from `QueryLiveAsync`, so any transformations must be applied in the live query. The fact selector must include exactly the writable facts to refresh. The bases also take the key/dimension property selector used to identify the unique constraint and use EF relational metadata and the supplied context's connection and active transaction. Refresh locks the selected stale rows until commit so concurrent markers are not lost. Non-discriminator shadow properties used in inserts require a configured constant default.
 
 ## SQLite
 
-[MaterializR.Sqlite](MaterializR.Sqlite) contains the linked Core sources and the EF Core SQLite provider. It does not yet provide SQLite-specific stale-row upsert implementations; `RowCache` and `SetCache` subclasses must implement `UpsertStaleAsync` themselves.
+[MaterializR.Sqlite](MaterializR.Sqlite) contains the linked Core sources and the EF Core SQLite provider. It does not yet provide generic SQLite cache bases; subclasses must implement both upsert hooks. The demo implements them with SQLite `ON CONFLICT` statements and unique tenant/key indexes. Existing databases created before those indexes were added need the corresponding unique indexes added explicitly; `EnsureCreated` does not update an existing schema. SQLite refreshes use the default untracked read rather than PostgreSQL-style row locks; concurrent writers may cause a busy or snapshot error, which is propagated to the caller.
 
 The SQLite and PostgreSQL projects each compile their own copy of the Core types. Reference only one of these projects or the standalone Core project in a consuming project to avoid duplicate types.
 
@@ -103,7 +102,13 @@ protected override async Task OnInitializedAsync()
 ```
 
 Both cache types use the same cycle:
-1. Read the tenant's stale keys/dimensions.
-2. Query live source tables for those keys only.
-3. Merge facts into cache rows.
-4. Clear `IsStale` for the tenant's rows.
+1. Select the tenant's stale rows in a transaction (PostgreSQL locks them until commit).
+2. Query live source tables for those keys or dimensions.
+3. Upsert returned facts and clear `IsStale` only for selected rows; ignore unrequested live rows.
+4. Delete selected stale rows for which no live data was returned. For zero-valued rollups that should remain cached, return a zero-valued live row for each requested dimension.
+
+`UpdateAsync` returns the number of selected rows refreshed or deleted. `GetAsync` refreshes a stale row using `UpsertFactsAsync`; if no single live row is found, it leaves the row stale and logs a warning. Orphan deletion uses the mapped primary key, which must not contain shadow properties.
+
+Custom cache implementations must implement **both** `UpsertStaleAsync` and `UpsertFactsAsync` with atomic, tenant-scoped database upserts. The former marks rows stale without changing existing facts; the latter writes live facts and clears the stale flag. Each hook must honor the supplied context's transaction, handle an empty input, and avoid using EF's change tracker. They may share their SQL generation and execution. Provider implementations can override `LockStaleRowsAsync` for their database's locking semantics. The old `MergeAsync`, `UpdateFacts`, and `UpsertAsync` hooks have been removed.
+
+Upserts and orphan deletions bypass EF tracking. Already-tracked cache entities are not synchronized or detached: reload them before relying on their values, and do not later save conflicting tracked inserts or modifications. Source-entity change tracking in the `SaveChangesAsync` example is separate from cache persistence.

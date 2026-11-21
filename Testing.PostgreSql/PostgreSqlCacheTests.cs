@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using System.Linq.Expressions;
+using Testcontainers.PostgreSql;
 
 namespace Testing;
 
@@ -14,6 +15,24 @@ public sealed class PostgreSqlCacheTests
 {
     private const int Tenant = 1;
     private const int OtherTenant = 2;
+    private static readonly PostgreSqlContainer Database = new PostgreSqlBuilder("postgres:17-alpine").Build();
+
+    [ClassInitialize]
+    public static async Task StartDatabaseAsync(TestContext context)
+    {
+        try
+        {
+            await Database.StartAsync();
+        }
+        catch
+        {
+            await Database.DisposeAsync();
+            throw;
+        }
+    }
+
+    [ClassCleanup]
+    public static async Task StopDatabaseAsync() => await Database.DisposeAsync();
 
     [TestMethod]
     public async Task RowCache_UpsertsDistinctKeysAndPreservesExistingFactsPerTenant()
@@ -21,7 +40,7 @@ public sealed class PostgreSqlCacheTests
         var factory = CreateFactory();
         await using var db = factory.CreateDbContext();
         await ResetTablesAsync(db);
-        var existing = new PgRowCache { TenantId = Tenant, CacheKey = 5, CachedFact = "preserved" };
+        var existing = new PgRowCache { TenantId = Tenant, CacheKey = 5, CachedFact = "preserved", IsStale = false };
         db.RowCaches.AddRange(
             existing,
             new PgRowCache { TenantId = OtherTenant, CacheKey = 5, CachedFact = "other", IsStale = false });
@@ -30,7 +49,7 @@ public sealed class PostgreSqlCacheTests
         var cache = CreateRowCache(factory);
         await cache.MarkStaleKeysAsync(db, Tenant, [5, 5, 6]);
 
-        Assert.IsTrue(existing.IsStale);
+        Assert.IsFalse(existing.IsStale);
         var rows = await db.RowCaches.AsNoTracking().OrderBy(row => row.TenantId).ThenBy(row => row.CacheKey).ToArrayAsync();
         Assert.HasCount(3, rows);
         Assert.AreEqual("preserved", rows.Single(row => row.TenantId == Tenant && row.CacheKey == 5).CachedFact);
@@ -41,6 +60,174 @@ public sealed class PostgreSqlCacheTests
         Assert.IsFalse(rows.Single(row => row.TenantId == OtherTenant).IsStale);
         Assert.IsInstanceOfType<PgSpecialRowCache>(rows.Single(row => row.TenantId == Tenant && row.CacheKey == 6));
         Assert.AreEqual("special placeholder", ((PgSpecialRowCache)rows.Single(row => row.TenantId == Tenant && row.CacheKey == 6)).SpecialFact);
+    }
+
+    [TestMethod]
+    public async Task RowCache_RefreshUpsertUpdatesOnlyFactsForTheSelectedTenantWithoutSynchronizingTrackedRows()
+    {
+        var factory = CreateFactory();
+        await using var db = factory.CreateDbContext();
+        await ResetTablesAsync(db);
+        var tracked = new PgRowCache { TenantId = Tenant, CacheKey = 5, CachedFact = "old", IsStale = true };
+        db.RowCaches.AddRange(
+            tracked,
+            new PgRowCache { TenantId = OtherTenant, CacheKey = 5, CachedFact = "other", IsStale = true });
+        await db.SaveChangesAsync();
+        var cache = CreateRowCache(factory);
+
+        await cache.RefreshAsync(db, Tenant,
+        [
+            new PgRowCache { TenantId = Tenant, CacheKey = 5, CachedFact = "superseded", IsStale = true },
+            new PgRowCache { TenantId = Tenant, CacheKey = 5, CachedFact = "refreshed", IsStale = true },
+            new PgRowCache { TenantId = Tenant, CacheKey = 6, CachedFact = "inserted", IsStale = true }
+        ]);
+
+        Assert.AreEqual("old", tracked.CachedFact);
+        Assert.IsTrue(tracked.IsStale);
+        Assert.AreEqual(EntityState.Unchanged, db.Entry(tracked).State);
+        var rows = await db.RowCaches.AsNoTracking().OrderBy(row => row.TenantId).ThenBy(row => row.CacheKey).ToArrayAsync();
+        Assert.AreEqual("refreshed", rows.Single(row => row.TenantId == Tenant && row.CacheKey == 5).CachedFact);
+        Assert.IsFalse(rows.Single(row => row.TenantId == Tenant && row.CacheKey == 5).IsStale);
+        Assert.AreEqual("inserted", rows.Single(row => row.TenantId == Tenant && row.CacheKey == 6).CachedFact);
+        Assert.IsFalse(rows.Single(row => row.TenantId == Tenant && row.CacheKey == 6).IsStale);
+        Assert.AreEqual("other", rows.Single(row => row.TenantId == OtherTenant).CachedFact);
+        Assert.IsTrue(rows.Single(row => row.TenantId == OtherTenant).IsStale);
+    }
+
+    [TestMethod]
+    public async Task RowCache_LocksStaleRowsForOneTenantInStableKeyOrderWithoutTracking()
+    {
+        var factory = CreateFactory();
+        await using var db = factory.CreateDbContext();
+        await ResetTablesAsync(db);
+        db.RowCaches.AddRange(
+            new PgRowCache { TenantId = Tenant, CacheKey = 9 },
+            new PgRowCache { TenantId = Tenant, CacheKey = 3 },
+            new PgRowCache { TenantId = Tenant, CacheKey = 4, IsStale = false },
+            new PgRowCache { TenantId = OtherTenant, CacheKey = 1 });
+        await db.SaveChangesAsync();
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        var cache = CreateRowCache(factory);
+
+        var rows = await cache.LockStaleAsync(db, Tenant);
+
+        CollectionAssert.AreEqual(new[] { 3, 9 }, rows.Select(row => row.CacheKey).ToArray());
+        Assert.IsTrue(rows.All(row => db.Entry(row).State == EntityState.Detached));
+        Assert.IsNotNull(db.Database.CurrentTransaction);
+        await transaction.RollbackAsync();
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task RowCache_UpdateAsyncSerializesConcurrentRefreshOrInvalidation(bool invalidate)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var ct = timeout.Token;
+        var factory = CreateFactory();
+        await using var setup = factory.CreateDbContext();
+        await ResetTablesAsync(setup);
+        setup.RowCaches.AddRange(
+            new PgSpecialRowCache { TenantId = Tenant, CacheKey = 5, CachedFact = "old", SpecialFact = "retained subtype fact" },
+            new PgRowCache { TenantId = Tenant, CacheKey = 6, CachedFact = "orphan" },
+            new PgRowCache { TenantId = Tenant, CacheKey = 7, CachedFact = "fresh", IsStale = false },
+            new PgRowCache { TenantId = OtherTenant, CacheKey = 5, CachedFact = "other live" },
+            new PgRowCache { TenantId = OtherTenant, CacheKey = 6, CachedFact = "other orphan" });
+        await setup.SaveChangesAsync(ct);
+
+        var enteredQuery = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseQuery = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cache = CreateRowCache(factory);
+        cache.LiveQuery = async (db, tenant, keys, token) =>
+        {
+            Assert.AreEqual(Tenant, tenant);
+            CollectionAssert.AreEquivalent(new[] { 5, 6 }, keys);
+            enteredQuery.TrySetResult(((NpgsqlConnection)db.Database.GetDbConnection()).ProcessID);
+            await releaseQuery.Task.WaitAsync(token);
+            return [new PgRowCache { TenantId = tenant, CacheKey = 5, CachedFact = "live fact" }];
+        };
+
+        var applicationName = $"materializr-concurrency-{Guid.NewGuid():N}";
+        var competingFactory = CreateFactory(applicationName);
+        var competingCache = CreateRowCache(competingFactory);
+        await using var marker = competingFactory.CreateDbContext();
+        var first = cache.UpdateAsync(Tenant, ct);
+        Task<int>? second = null;
+        try
+        {
+            var blocker = await enteredQuery.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+            second = invalidate
+                ? MarkAsync()
+                : competingCache.UpdateAsync(Tenant, ct);
+            await WaitForBlockedSessionAsync(setup, applicationName, blocker, ct);
+            Assert.IsFalse(second.IsCompleted, "The competing operation must wait for the first refresh's row locks.");
+            releaseQuery.TrySetResult();
+
+            Assert.AreEqual(2, await first.WaitAsync(TimeSpan.FromSeconds(10), ct));
+            Assert.AreEqual(0, await second.WaitAsync(TimeSpan.FromSeconds(10), ct));
+
+            var rows = await setup.RowCaches.AsNoTracking().ToArrayAsync(ct);
+            var refreshed = rows.Single(row => row.TenantId == Tenant && row.CacheKey == 5);
+            Assert.AreEqual("live fact", refreshed.CachedFact);
+            Assert.AreEqual(invalidate, refreshed.IsStale, "A stale mark that waited for refresh must not be lost.");
+            Assert.IsInstanceOfType<PgSpecialRowCache>(refreshed);
+            Assert.AreEqual("retained subtype fact", ((PgSpecialRowCache)refreshed).SpecialFact);
+            var orphan = rows.SingleOrDefault(row => row.TenantId == Tenant && row.CacheKey == 6);
+            if (invalidate)
+            {
+                Assert.IsNotNull(orphan, "Invalidation after orphan deletion must atomically recreate its marker.");
+                Assert.AreEqual("placeholder", orphan.CachedFact);
+                Assert.IsTrue(orphan.IsStale);
+                Assert.IsInstanceOfType<PgSpecialRowCache>(orphan);
+            }
+            else
+            {
+                Assert.IsNull(orphan, "Both refreshes must leave a missing live row deleted.");
+            }
+            var fresh = rows.Single(row => row.TenantId == Tenant && row.CacheKey == 7);
+            Assert.AreEqual("fresh", fresh.CachedFact);
+            Assert.IsFalse(fresh.IsStale);
+            var otherLive = rows.Single(row => row.TenantId == OtherTenant && row.CacheKey == 5);
+            var otherOrphan = rows.Single(row => row.TenantId == OtherTenant && row.CacheKey == 6);
+            Assert.AreEqual("other live", otherLive.CachedFact);
+            Assert.AreEqual("other orphan", otherOrphan.CachedFact);
+            Assert.IsTrue(otherLive.IsStale);
+            Assert.IsTrue(otherOrphan.IsStale);
+            Assert.HasCount(invalidate ? 5 : 4, rows);
+        }
+        finally
+        {
+            releaseQuery.TrySetResult();
+            await Task.WhenAll(second is null ? [first] : new Task[] { first, second })
+                .WaitAsync(TimeSpan.FromSeconds(20));
+        }
+
+        async Task<int> MarkAsync()
+        {
+            await competingCache.MarkStaleKeysAsync(marker, Tenant, [5, 6], ct);
+            return 0;
+        }
+    }
+
+    private static async Task WaitForBlockedSessionAsync(PgTestContext observer, string applicationName, int blocker, CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        await observer.Database.OpenConnectionAsync(timeout.Token);
+        await using var command = observer.Database.GetDbConnection().CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_stat_activity
+                WHERE application_name = @application
+                  AND @blocker = ANY(pg_blocking_pids(pid))
+                  AND wait_event_type = 'Lock')
+            """;
+        command.Parameters.Add(new NpgsqlParameter("application", applicationName));
+        command.Parameters.Add(new NpgsqlParameter("blocker", blocker));
+        while (!(bool)(await command.ExecuteScalarAsync(timeout.Token))!)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+        }
     }
 
     [TestMethod]
@@ -60,22 +247,78 @@ public sealed class PostgreSqlCacheTests
     }
 
     [TestMethod]
-    public async Task RowCache_DetachesMatchingPendingAddedEntityAfterUpsert()
+    public async Task RowCache_UpsertsDoNotTouchTrackedOrIncomingEntities()
     {
         var factory = CreateFactory();
         await using var db = factory.CreateDbContext();
         await ResetTablesAsync(db);
+        var existing = new PgRowCache { TenantId = Tenant, CacheKey = 14, CachedFact = "database", IsStale = false };
+        db.RowCaches.Add(existing);
+        await db.SaveChangesAsync();
+        existing.CachedFact = "pending edit";
+        db.ChangeTracker.DetectChanges();
         var pending = new PgRowCache { TenantId = Tenant, CacheKey = 15, CachedFact = "unpersisted" };
         db.RowCaches.Add(pending);
+        var incoming = new PgRowCache { TenantId = OtherTenant, CacheKey = 14, CachedFact = "refreshed", IsStale = true };
         var cache = CreateRowCache(factory);
 
-        await cache.MarkStaleKeysAsync(db, Tenant, [15]);
-        Assert.AreEqual(EntityState.Detached, db.Entry(pending).State);
-        await db.SaveChangesAsync();
+        await cache.MarkStaleKeysAsync(db, Tenant, [14, 15]);
+        await cache.RefreshAsync(db, Tenant, [incoming]);
 
-        var persisted = await db.RowCaches.AsNoTracking().SingleAsync(row => row.TenantId == Tenant && row.CacheKey == 15);
-        Assert.AreEqual("placeholder", persisted.CachedFact);
-        Assert.IsTrue(persisted.IsStale);
+        Assert.HasCount(2, db.ChangeTracker.Entries<PgRowCache>().ToArray());
+        Assert.AreEqual(EntityState.Modified, db.Entry(existing).State);
+        Assert.AreEqual("pending edit", existing.CachedFact);
+        Assert.AreEqual("database", db.Entry(existing).Property(row => row.CachedFact).OriginalValue);
+        Assert.IsTrue(db.Entry(existing).Property(row => row.CachedFact).IsModified);
+        Assert.IsFalse(existing.IsStale);
+        Assert.AreEqual(EntityState.Added, db.Entry(pending).State);
+        Assert.AreEqual("unpersisted", pending.CachedFact);
+        Assert.AreEqual(EntityState.Detached, db.Entry(incoming).State);
+        Assert.AreEqual(OtherTenant, incoming.TenantId);
+        Assert.IsTrue(incoming.IsStale);
+        var persisted = await db.RowCaches.AsNoTracking().OrderBy(row => row.CacheKey).ToArrayAsync();
+        Assert.HasCount(2, persisted);
+        Assert.AreEqual("refreshed", persisted[0].CachedFact);
+        Assert.IsFalse(persisted[0].IsStale);
+        Assert.AreEqual("placeholder", persisted[1].CachedFact);
+        Assert.IsTrue(persisted[1].IsStale);
+    }
+
+    [TestMethod]
+    public async Task RowCache_UsesConfiguredShadowDefaultWithoutReadingTrackedValue()
+    {
+        var factory = CreateFactory();
+        await using var db = factory.CreateDbContext();
+        await ResetTablesAsync(db);
+        var incoming = new PgSpecialRowCache { TenantId = Tenant, CacheKey = 20, CachedFact = "fact" };
+        db.RowCaches.Add(incoming);
+        db.Entry(incoming).Property<string>("special shadow").CurrentValue = "tracked value";
+        var cache = CreateRowCache(factory);
+
+        await cache.RefreshAsync(db, Tenant, [incoming]);
+
+        Assert.AreEqual(EntityState.Added, db.Entry(incoming).State);
+        Assert.AreEqual("tracked value", db.Entry(incoming).Property<string>("special shadow").CurrentValue);
+        var storedDefault = await db.RowCaches.AsNoTracking().OfType<PgSpecialRowCache>()
+            .Where(row => row.CacheKey == 20)
+            .Select(row => EF.Property<string>(row, "special shadow")).SingleAsync();
+        Assert.AreEqual("configured default", storedDefault);
+    }
+
+    [TestMethod]
+    public async Task RowCache_RejectsShadowPropertyWithoutConfiguredDefaultWithoutTracking()
+    {
+        var factory = CreateFactory();
+        await using var db = factory.CreateDbContext();
+        await ResetTablesAsync(db);
+        var incoming = new PgMissingShadowRow { TenantId = Tenant, CacheKey = 21 };
+        var cache = CreateRowCache(factory);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => cache.RefreshAsync(db, Tenant, [incoming]));
+
+        StringAssert.Contains(exception.Message, "missing shadow");
+        Assert.IsEmpty(db.ChangeTracker.Entries());
+        Assert.AreEqual(0, await db.RowCaches.AsNoTracking().CountAsync());
     }
 
     [TestMethod]
@@ -169,6 +412,35 @@ public sealed class PostgreSqlCacheTests
     }
 
     [TestMethod]
+    public async Task SetCache_RefreshUpsertUpdatesFactsAndKeepsOtherTenantRowsIsolated()
+    {
+        var factory = CreateFactory();
+        await using var db = factory.CreateDbContext();
+        await ResetTablesAsync(db);
+        var dimension = new PgSetCache.Dimensions(new DateOnly(2026, 1, 2), "north");
+        db.SetCaches.AddRange(
+            new PgSetCache { TenantId = Tenant, Date = dimension.Date, Region = dimension.Region, CachedFact = "old", IsStale = true },
+            new PgSetCache { TenantId = OtherTenant, Date = dimension.Date, Region = dimension.Region, CachedFact = "other", IsStale = true });
+        await db.SaveChangesAsync();
+        var cache = CreateSetCache(factory);
+
+        await cache.RefreshAsync(db, Tenant,
+        [
+            new PgSetCache { TenantId = Tenant, Date = dimension.Date, Region = dimension.Region, CachedFact = "superseded", IsStale = true },
+            new PgSetCache { TenantId = Tenant, Date = dimension.Date, Region = dimension.Region, CachedFact = "refreshed", IsStale = true },
+            new PgSetCache { TenantId = Tenant, Date = new DateOnly(2026, 1, 3), Region = "south", CachedFact = "inserted", IsStale = true }
+        ]);
+
+        var rows = await db.SetCaches.AsNoTracking().OrderBy(row => row.TenantId).ThenBy(row => row.Date).ToArrayAsync();
+        Assert.AreEqual("refreshed", rows.Single(row => row.TenantId == Tenant && row.Date == dimension.Date).CachedFact);
+        Assert.IsFalse(rows.Single(row => row.TenantId == Tenant && row.Date == dimension.Date).IsStale);
+        Assert.AreEqual("inserted", rows.Single(row => row.TenantId == Tenant && row.Date == new DateOnly(2026, 1, 3)).CachedFact);
+        Assert.IsFalse(rows.Single(row => row.TenantId == Tenant && row.Date == new DateOnly(2026, 1, 3)).IsStale);
+        Assert.AreEqual("other", rows.Single(row => row.TenantId == OtherTenant).CachedFact);
+        Assert.IsTrue(rows.Single(row => row.TenantId == OtherTenant).IsStale);
+    }
+
+    [TestMethod]
     public async Task SetCache_ConcurrentContextsUpsertTheSameMissingDimension()
     {
         var factory = CreateFactory();
@@ -221,15 +493,15 @@ public sealed class PostgreSqlCacheTests
     private static PgSetCacheImpl CreateSetCache(IDbContextFactory<PgTestContext> factory) =>
         new(NullLogger<PgSetCacheImpl>.Instance, factory);
 
-    private static PgTestContextFactory CreateFactory()
+    private static PgTestContextFactory CreateFactory(string? applicationName = null)
     {
-        var connectionString = Environment.GetEnvironmentVariable("MATERIALIZR_POSTGRESQL");
-        if (string.IsNullOrWhiteSpace(connectionString))
+        var builder = new NpgsqlConnectionStringBuilder(Database.GetConnectionString());
+        if (applicationName is not null)
         {
-            Assert.Inconclusive("Set MATERIALIZR_POSTGRESQL to a disposable PostgreSQL database to run integration tests.");
+            builder.ApplicationName = applicationName;
+            builder.Options = "-c lock_timeout=15000";
         }
-
-        var options = new DbContextOptionsBuilder<PgTestContext>().UseNpgsql(connectionString).Options;
+        var options = new DbContextOptionsBuilder<PgTestContext>().UseNpgsql(builder.ConnectionString).Options;
         return new PgTestContextFactory(options);
     }
 
@@ -246,6 +518,8 @@ public sealed class PostgreSqlCacheTests
                 "stale flag" boolean NOT NULL,
                 "entity kind" text NOT NULL,
                 "special fact" text NULL,
+                "special shadow" text NULL,
+                "missing shadow" text NULL,
                 CONSTRAINT "CK_special_fact" CHECK ("entity kind" <> 'special' OR "special fact" IS NOT NULL),
                 CONSTRAINT "PK_row cache" PRIMARY KEY ("tenant id", "cache key")
             );
@@ -287,10 +561,13 @@ public sealed class PostgreSqlCacheTests
                 entity.Property(row => row.IsStale).HasColumnName("stale flag");
                 entity.HasDiscriminator<string>("entity kind")
                     .HasValue<PgRowCache>("row")
-                    .HasValue<PgSpecialRowCache>("special");
+                    .HasValue<PgSpecialRowCache>("special")
+                    .HasValue<PgMissingShadowRow>("missing");
                 entity.Property<string>("entity kind").HasColumnName("entity kind");
             });
             modelBuilder.Entity<PgSpecialRowCache>().Property(row => row.SpecialFact).HasColumnName("special fact");
+            modelBuilder.Entity<PgSpecialRowCache>().Property<string>("special shadow").HasColumnName("special shadow").HasDefaultValue("configured default").ValueGeneratedNever();
+            modelBuilder.Entity<PgMissingShadowRow>().Property<string>("missing shadow").HasColumnName("missing shadow");
             modelBuilder.Entity<PgSetCache>(entity =>
             {
                 entity.ToTable("set cache");
@@ -325,6 +602,8 @@ public sealed class PostgreSqlCacheTests
         public string? SpecialFact { get; set; } = "special placeholder";
     }
 
+    private sealed class PgMissingShadowRow : PgRowCache;
+
     private sealed class PgSetCache : ITenantCacheEntity<int>
     {
         public record Dimensions(DateOnly Date, string Region);
@@ -350,9 +629,18 @@ public sealed class PostgreSqlCacheTests
     {
         protected override DbSet<PgRowCache> CacheDbSet(PgTestContext db) => db.RowCaches;
         protected override Expression<Func<PgRowCache, int>> KeySelector => row => row.CacheKey;
+        protected override Expression<Func<PgRowCache, object?>> FactProperties => row => row.CachedFact;
         protected override PgRowCache FromKey(int key) => new PgSpecialRowCache { CacheKey = key };
-        protected override void UpdateFacts(PgRowCache existingRow, PgRowCache incomingRow) => existingRow.CachedFact = incomingRow.CachedFact;
-        protected override Task<PgRowCache[]> QueryLiveAsync(PgTestContext dbContext, int tenantId, int[] keys, CancellationToken cancellationToken) => Task.FromResult(Array.Empty<PgRowCache>());
+        public Func<PgTestContext, int, int[], CancellationToken, Task<PgRowCache[]>>? LiveQuery { get; set; }
+
+        protected override Task<PgRowCache[]> QueryLiveAsync(PgTestContext dbContext, int tenantId, int[] keys, CancellationToken cancellationToken) =>
+            LiveQuery?.Invoke(dbContext, tenantId, keys, cancellationToken) ?? Task.FromResult(Array.Empty<PgRowCache>());
+
+        public Task RefreshAsync(PgTestContext dbContext, int tenantId, PgRowCache[] rows, CancellationToken cancellationToken = default) =>
+            UpsertFactsAsync(dbContext, tenantId, rows, cancellationToken);
+
+        public Task<PgRowCache[]> LockStaleAsync(PgTestContext dbContext, int tenantId, CancellationToken cancellationToken = default) =>
+            LockStaleRowsAsync(dbContext, tenantId, cancellationToken);
     }
 
     private sealed class PgSetCacheImpl(
@@ -362,9 +650,11 @@ public sealed class PostgreSqlCacheTests
     {
         protected override DbSet<PgSetCache> CacheDbSet(PgTestContext db) => db.SetCaches;
         protected override Expression<Func<PgSetCache, object?>> DimensionsKeySelector => row => new { row.Date, row.Region };
+        protected override Expression<Func<PgSetCache, object?>> FactProperties => row => row.CachedFact;
         protected override PgSetCache FromDimensions(PgSetCache.Dimensions dimensions) => new() { Date = dimensions.Date, Region = dimensions.Region };
         protected override PgSetCache.Dimensions ToDimensions(PgSetCache entity) => new(entity.Date, entity.Region);
-        protected override void UpdateFacts(PgSetCache existingRow, PgSetCache incomingRow) => existingRow.CachedFact = incomingRow.CachedFact;
+        public Task RefreshAsync(PgTestContext dbContext, int tenantId, PgSetCache[] rows, CancellationToken cancellationToken = default) =>
+            UpsertFactsAsync(dbContext, tenantId, rows, cancellationToken);
         protected override Task<PgSetCache[]> QueryLiveAsync(PgTestContext dbContext, int tenantId, PgSetCache.Dimensions[] dimensions, CancellationToken cancellationToken) => Task.FromResult(Array.Empty<PgSetCache>());
     }
 }

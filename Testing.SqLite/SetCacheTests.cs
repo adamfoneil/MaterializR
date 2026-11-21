@@ -2,6 +2,7 @@ using Demo;
 using Demo.Cache;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Testing;
 
@@ -181,6 +182,64 @@ public sealed class SetCacheTests
         var rows = await db.PointsCache.AsNoTracking().ToArrayAsync();
         Assert.IsTrue(rows.Single(r => r.TenantId == Tenant).IsStale);
         Assert.IsFalse(rows.Single(r => r.TenantId == OtherTenant).IsStale);
+    }
+
+    [TestMethod]
+    public async Task UpdateAsync_RemovesOrphansAndIgnoresUnrequestedLiveDimensions()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var date = new DateOnly(2026, 1, 5);
+        db.Appointments.AddRange(
+            new Appointment { TenantId = Tenant, Date = date, TransportId = 1, Points = 3, ClientId = 1, Status = AppointmentStatus.Scheduled },
+            new Appointment { TenantId = Tenant, Date = date, TransportId = 2, Points = 8, ClientId = 2, Status = AppointmentStatus.Scheduled });
+        db.PointsCache.AddRange(
+            new PointsCache { TenantId = Tenant, Date = date, TransportId = 1, Scheduled = 1, IsStale = true },
+            new PointsCache { TenantId = Tenant, Date = date, TransportId = 2, Scheduled = 99, IsStale = false },
+            new PointsCache { TenantId = Tenant, Date = date, TransportId = 3, Scheduled = 12, IsStale = true },
+            new PointsCache { TenantId = OtherTenant, Date = date, TransportId = 3, Scheduled = 14, IsStale = true });
+        await db.SaveChangesAsync();
+
+        var cache = scope.ServiceProvider.GetRequiredService<PointsSetCache>();
+        Assert.AreEqual(2, await cache.UpdateAsync(Tenant));
+
+        var rows = await db.PointsCache.AsNoTracking().ToArrayAsync();
+        Assert.AreEqual(3, rows.Single(row => row.TenantId == Tenant && row.TransportId == 1).Scheduled);
+        Assert.IsFalse(rows.Single(row => row.TenantId == Tenant && row.TransportId == 1).IsStale);
+        Assert.AreEqual(99, rows.Single(row => row.TenantId == Tenant && row.TransportId == 2).Scheduled);
+        Assert.IsFalse(rows.Any(row => row.TenantId == Tenant && row.TransportId == 3));
+        Assert.IsTrue(rows.Single(row => row.TenantId == OtherTenant).IsStale);
+    }
+
+    [TestMethod]
+    public async Task UpdateAsync_RefreshesWithNoTrackingAndDisabledChangeDetection()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var date = new DateOnly(2026, 1, 5);
+        db.Appointments.Add(new Appointment { TenantId = Tenant, Date = date, TransportId = 1, Points = 7, ClientId = 1, Status = AppointmentStatus.Scheduled });
+        db.PointsCache.Add(new PointsCache { TenantId = Tenant, Date = date, TransportId = 1, Scheduled = 2, IsStale = true });
+        await db.SaveChangesAsync();
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<PointsSetCache>>();
+        var cache = new PointsSetCache(logger, new NoTrackingFactory(factory));
+
+        Assert.AreEqual(1, await cache.UpdateAsync(Tenant));
+
+        var row = await db.PointsCache.AsNoTracking().SingleAsync();
+        Assert.AreEqual(7, row.Scheduled);
+        Assert.IsFalse(row.IsStale);
+    }
+
+    private sealed class NoTrackingFactory(IDbContextFactory<ApplicationDbContext> inner) : IDbContextFactory<ApplicationDbContext>
+    {
+        public ApplicationDbContext CreateDbContext()
+        {
+            var db = inner.CreateDbContext();
+            db.ChangeTracker.QueryTrackingBehavior = QueryTrackingBehavior.NoTracking;
+            db.ChangeTracker.AutoDetectChangesEnabled = false;
+            return db;
+        }
     }
 
     private static Task MarkStaleAsync(PointsSetCache rollup, ApplicationDbContext db, int tenantId, DateOnly date, int transportId) =>

@@ -20,7 +20,17 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
 
     protected abstract DbSet<TCacheEntity> CacheDbSet(TDbContext db);
 
+    /// <summary>Atomically inserts stale rows or marks existing rows stale without changing their facts.</summary>
+    /// <remarks>Scope to the supplied tenant and transaction, accept empty input, and do not use EF tracking.</remarks>
     protected abstract Task UpsertStaleAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] rows, CancellationToken cancellationToken);
+
+    /// <summary>Atomically upserts live facts and clears the stale flag for the supplied tenant.</summary>
+    /// <remarks>Scope to the supplied tenant and transaction, accept empty input, and do not use EF tracking.</remarks>
+    protected abstract Task UpsertFactsAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] rows, CancellationToken cancellationToken);
+
+    /// <summary>Selects stale rows inside the refresh transaction. Providers can override this to lock them.</summary>
+    protected virtual Task<TCacheEntity[]> LockStaleRowsAsync(TDbContext dbContext, TTenantKey tenantId, CancellationToken cancellationToken) =>
+        CacheDbSet(dbContext).AsNoTracking().ForTenant(tenantId).Where(row => row.IsStale).ToArrayAsync(cancellationToken);
 
     /// <summary>
     /// create a new cache row for a set of dimensions. <see cref="ITenantCacheEntity{TTenantKey}.TenantId"/> is set for you
@@ -30,56 +40,9 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
     protected abstract TCacheDimensions ToDimensions(TCacheEntity entity);
 
     /// <summary>
-    /// apply incoming values to an existing row, excluding key properties
-    /// </summary>
-    protected abstract void UpdateFacts(TCacheEntity existingRow, TCacheEntity incomingRow);
-
-    /// <summary>
     /// query that returns the live view data for a set of dimensions. Source queries must be scoped to the tenant
     /// </summary>
     protected abstract Task<TCacheEntity[]> QueryLiveAsync(TDbContext dbContext, TTenantKey tenantId, TCacheDimensions[] dimensions, CancellationToken cancellationToken);
-
-    /// <summary>
-    /// upsert queried live data into the cache/view table
-    /// </summary>
-    protected virtual async Task MergeAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] data, CancellationToken cancellationToken = default)
-    {
-        if (data.Length == 0)
-        {
-            return;
-        }
-
-        var incomingByDimensions = data
-            .GroupBy(row => ToDimensions(row))
-            .ToDictionary(g => g.Key, g => g.Last());
-
-        var dimensions = incomingByDimensions.Keys.ToArray();
-        var existingRows = await ExistingRowsAsync(dbContext, tenantId, dimensions, cancellationToken);
-        var existingByDimensions = existingRows.ToDictionary(row => ToDimensions(row));
-        var dbSet = CacheDbSet(dbContext);
-
-        foreach (var (dimension, incomingRow) in incomingByDimensions)
-        {
-            if (existingByDimensions.TryGetValue(dimension, out var existingRow))
-            {
-                UpdateFacts(existingRow, incomingRow);
-            }
-            else
-            {
-                incomingRow.TenantId = tenantId;
-                dbSet.Add(incomingRow);
-            }
-        }
-
-        await dbContext.SaveChangesAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// fetch existing rollup rows of a tenant for a dimension batch so they can be marked modified.
-    /// Overrides must restrict results to the tenant, for example with <c>.Where(row => row.TenantId.Equals(tenantId))</c>
-    /// </summary>
-    protected virtual Task<TCacheEntity[]> ExistingRowsAsync(TDbContext dbContext, TTenantKey tenantId, TCacheDimensions[] dimensions, CancellationToken cancellationToken) =>
-        CacheDbSet(dbContext).ForTenant(tenantId).ToArrayAsync(cancellationToken);
 
     /// <summary>
     /// flag dimensions as modified, inserting where they don't exist
@@ -119,20 +82,28 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
         {
             try
             {
-                var dimensions = await CacheDbSet(db).AsNoTracking().ForTenant(tenantId).Where(row => row.IsStale).ToArrayAsync(cancellationToken);
-                if (!dimensions.Any()) return 0;
-                var dimensionKeys = dimensions.Select(row => ToDimensions(row)).ToArray();
-                var liveData = await QueryLiveAsync(db, tenantId, dimensionKeys, cancellationToken);
+                var staleRows = await LockStaleRowsAsync(db, tenantId, cancellationToken);
+                var dimensions = staleRows.Select(ToDimensions).ToHashSet();
+                if (dimensions.Count == 0)
+                {
+                    await txn.CommitAsync(cancellationToken);
+                    return 0;
+                }
+                var liveData = (await QueryLiveAsync(db, tenantId, [.. dimensions], cancellationToken))
+                    .Where(row => dimensions.Contains(ToDimensions(row)))
+                    .GroupBy(ToDimensions).Select(group => group.Last()).ToArray();
+                await UpsertFactsAsync(db, tenantId, liveData, cancellationToken);
 
-                await MergeAsync(db, tenantId, liveData, cancellationToken);
-                int result = await CacheDbSet(db).ForTenant(tenantId).Where(row => row.IsStale).ExecuteUpdateAsync(p => p.SetProperty(row => row.IsStale, false), cancellationToken);
+                var refreshed = liveData.Select(ToDimensions).ToHashSet();
+                var orphans = staleRows.Where(row => !refreshed.Contains(ToDimensions(row))).ToArray();
+                var deleted = await Util.DeleteStaleRowsAsync(db, CacheDbSet(db), tenantId, orphans, cancellationToken);
                 await txn.CommitAsync(cancellationToken);
 
-                return result;
+                return liveData.Length + deleted;
             }
             catch (Exception exc)
             {
-                await txn.RollbackAsync(cancellationToken);
+                await txn.RollbackAsync(CancellationToken.None);
                 Logger.LogError(exc, "Error in UpdateAsync");
                 throw;
             }

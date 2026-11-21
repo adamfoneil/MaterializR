@@ -28,30 +28,18 @@ public class AppointmentPriceRowCache(
             .ToArrayAsync(cancellationToken);
     }
 
-    protected override void UpdateFacts(AppointmentPriceCache existingRow, AppointmentPriceCache incomingRow)
-    {
-        existingRow.TotalPrice = incomingRow.TotalPrice;
-    }
-
     protected override AppointmentPriceCache FromKey(int key) => new() { AppointmentId = key };
 
     protected override DbSet<AppointmentPriceCache> CacheDbSet(ApplicationDbContext db) => db.AppointmentPrices;
 
-    protected override async Task UpsertStaleAsync(ApplicationDbContext dbContext, int tenantId, AppointmentPriceCache[] rows, CancellationToken cancellationToken)
-    {
-        var keys = rows.Select(row => row.AppointmentId).ToHashSet();
-        var existingRows = await dbContext.AppointmentPrices
-            .Where(row => row.TenantId == tenantId && keys.Contains(row.AppointmentId))
-            .ToArrayAsync(cancellationToken);
-        var existingKeys = existingRows.Select(row => row.AppointmentId).ToHashSet();
+    protected override Task UpsertStaleAsync(ApplicationDbContext dbContext, int tenantId, AppointmentPriceCache[] rows, CancellationToken cancellationToken) =>
+        UpsertAsync(dbContext, tenantId, rows, refresh: false, cancellationToken);
 
-        foreach (var existing in existingRows)
-        {
-            existing.IsStale = true;
-            dbContext.Entry(existing).Property(row => row.IsStale).IsModified = true;
-        }
+    protected override Task UpsertFactsAsync(ApplicationDbContext dbContext, int tenantId, AppointmentPriceCache[] rows, CancellationToken cancellationToken) =>
+        UpsertAsync(dbContext, tenantId, rows, refresh: true, cancellationToken);
 
-        dbContext.AppointmentPrices.AddRange(rows.Where(row => !existingKeys.Contains(row.AppointmentId)));
-        await dbContext.SaveChangesAsync(cancellationToken);
-    }
+    private static Task UpsertAsync(ApplicationDbContext dbContext, int tenantId, AppointmentPriceCache[] rows, bool refresh, CancellationToken cancellationToken) =>
+        SqliteUpsert.ExecuteAsync(dbContext, rows, row =>
+            $"INSERT INTO \"AppointmentPrices\" (\"TenantId\", \"AppointmentId\", \"TotalPrice\", \"IsStale\") VALUES ({tenantId}, {row.AppointmentId}, {row.TotalPrice}, {!refresh}) ON CONFLICT (\"TenantId\", \"AppointmentId\") DO UPDATE SET \"TotalPrice\" = CASE WHEN {refresh} THEN excluded.\"TotalPrice\" ELSE \"TotalPrice\" END, \"IsStale\" = excluded.\"IsStale\"",
+            cancellationToken);
 }

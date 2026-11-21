@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
+using Npgsql;
 using System.Linq.Expressions;
 using System.Reflection;
 
@@ -18,6 +19,8 @@ internal static class PostgreSqlStaleUpsert
         TTenantKey tenantId,
         TCacheEntity[] rows,
         LambdaExpression keySelector,
+        LambdaExpression factSelector,
+        bool refresh,
         CancellationToken cancellationToken)
         where TDbContext : DbContext
         where TCacheEntity : class, ITenantCacheEntity<TTenantKey>
@@ -35,9 +38,9 @@ internal static class PostgreSqlStaleUpsert
             ?? throw new InvalidOperationException($"The {nameof(ITenantCacheEntity<>.TenantId)} property is not mapped.");
         var staleProperty = entityType.FindProperty(nameof(ICacheEntity.IsStale))
             ?? throw new InvalidOperationException($"The {nameof(ICacheEntity.IsStale)} property is not mapped.");
-
-        var identityProperties = GetSelectedProperties(entityType, keySelector);
+        var identityProperties = GetSelectedProperties(entityType, keySelector, "key");
         var conflictProperties = new[] { tenantProperty }.Concat(identityProperties).Distinct().ToArray();
+        var factProperties = GetFactProperties(entityType, factSelector, conflictProperties, tenantProperty, staleProperty, table);
         EnsureUniqueConflictTarget(entityType, conflictProperties);
 
         var runtimeEntityTypes = rows
@@ -46,7 +49,7 @@ internal static class PostgreSqlStaleUpsert
             .ToArray();
         if (runtimeEntityTypes.Any(rowType => rowType.GetTableName() != tableName || rowType.GetSchema() != schema))
         {
-            throw new InvalidOperationException("All stale cache row types must map to the same table and schema.");
+            throw new InvalidOperationException("All cache row types in an upsert must map to the same table and schema.");
         }
 
         var mappedColumns = runtimeEntityTypes.SelectMany(rowType => rowType.GetProperties())
@@ -57,8 +60,7 @@ internal static class PostgreSqlStaleUpsert
                 item.Property == staleProperty ||
                 item.Property == tenantProperty ||
                 conflictProperties.Contains(item.Property) ||
-                (item.Property.ValueGenerated == ValueGenerated.Never &&
-                 item.Property.GetComputedColumnSql(table) is null))
+                (item.Property.ValueGenerated == ValueGenerated.Never && item.Property.GetComputedColumnSql(table) is null))
             .ToArray();
 
         if (mappedColumns.All(item => item.Property != staleProperty))
@@ -68,14 +70,25 @@ internal static class PostgreSqlStaleUpsert
 
         var sqlHelper = dbContext.GetService<ISqlGenerationHelper>();
         var quotedTable = sqlHelper.DelimitIdentifier(tableName, schema);
-        var insertColumns = string.Join(", ", mappedColumns.Select(item => sqlHelper.DelimitIdentifier(item.Column!)));
-        var conflictColumns = string.Join(", ", conflictProperties.Select(property =>
-            sqlHelper.DelimitIdentifier(property.GetColumnName(table)
-                ?? throw new InvalidOperationException($"Property {property.Name} is not mapped to table {tableName}."))));
-        var staleColumn = sqlHelper.DelimitIdentifier(staleProperty.GetColumnName(table)
-            ?? throw new InvalidOperationException($"Property {staleProperty.Name} is not mapped to table {tableName}."));
+        var insertColumns = mappedColumns.Select(item => sqlHelper.DelimitIdentifier(item.Column!)).ToArray();
+        var conflictColumns = conflictProperties.Select(property =>
+            sqlHelper.DelimitIdentifier(GetColumnName(property, table, tableName))).ToArray();
+        var staleColumn = sqlHelper.DelimitIdentifier(GetColumnName(staleProperty, table, tableName));
+        var assignments = refresh
+            ? string.Join(", ", factProperties
+                .Select(property => $"{sqlHelper.DelimitIdentifier(GetColumnName(property, table, tableName))} = EXCLUDED.{sqlHelper.DelimitIdentifier(GetColumnName(property, table, tableName))}")
+                .Append($"{staleColumn} = FALSE"))
+            : $"{staleColumn} = TRUE";
+        // PostgreSQL cannot update a conflict target twice in one INSERT; the last row wins.
+        var rowKeyProperties = conflictProperties.Where(property => property != tenantProperty).ToArray();
+        var uniqueRows = new Dictionary<object?[], TCacheEntity>(new ConflictKeyComparer(rowKeyProperties));
+        foreach (var row in rows)
+        {
+            var key = rowKeyProperties.Select(property => GetPropertyValue(dbContext, row, property, entityType)).ToArray();
+            uniqueRows[key] = row;
+        }
+        rows = uniqueRows.Values.ToArray();
         var connection = dbContext.Database.GetDbConnection();
-
         var batchSize = Math.Max(1, MaxParametersPerCommand / mappedColumns.Length);
         IDbContextTransaction? transaction = null;
         try
@@ -88,31 +101,19 @@ internal static class PostgreSqlStaleUpsert
             var dbTransaction = dbContext.Database.CurrentTransaction?.GetDbTransaction();
             foreach (var batch in rows.Chunk(batchSize))
             {
-                var parameters = new DynamicParameters();
-                var values = new List<string>(batch.Length);
-                var parameterIndex = 0;
-
-                foreach (var row in batch)
+                var values = batch.Select(row => mappedColumns.Select(item =>
                 {
-                    var parameterNames = new List<string>(mappedColumns.Length);
-                    foreach (var (property, _) in mappedColumns)
-                    {
-                        var parameterName = $"p{parameterIndex++}";
-                        object? value = property == tenantProperty
-                            ? tenantId
-                            : property == staleProperty
-                                ? true
-                                : GetPropertyValue(dbContext, row, property, entityType);
-                        var converter = property.GetRelationalTypeMapping().Converter;
-                        parameters.Add(parameterName, converter is null ? value : converter.ConvertToProvider(value));
-                        parameterNames.Add($"@{parameterName}");
-                    }
+                    var property = item.Property;
+                    object? value = property == tenantProperty
+                        ? tenantId
+                        : property == staleProperty
+                            ? !refresh
+                            : GetPropertyValue(dbContext, row, property, entityType);
+                    var converter = property.GetRelationalTypeMapping().Converter;
+                    return converter is null ? value : converter.ConvertToProvider(value);
+                }).ToArray());
 
-                    values.Add($"({string.Join(", ", parameterNames)})");
-                }
-
-                var commandText = $"INSERT INTO {quotedTable} ({insertColumns}) VALUES {string.Join(", ", values)} " +
-                    $"ON CONFLICT ({conflictColumns}) DO UPDATE SET {staleColumn} = TRUE";
+                var (commandText, parameters) = UpsertSql.Statement(quotedTable, insertColumns, conflictColumns, assignments, values);
                 await connection.ExecuteAsync(new CommandDefinition(
                     commandText,
                     parameters,
@@ -121,7 +122,6 @@ internal static class PostgreSqlStaleUpsert
             }
 
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
-            SynchronizeTrackedRows(dbContext, tenantId, rows, conflictProperties, tenantProperty, staleProperty, entityType);
         }
         catch
         {
@@ -134,13 +134,53 @@ internal static class PostgreSqlStaleUpsert
         }
     }
 
-    private static IProperty[] GetSelectedProperties(IEntityType entityType, LambdaExpression selector)
+    internal static async Task<TCacheEntity[]> LockStaleRowsAsync<TDbContext, TCacheEntity, TTenantKey>(
+        TDbContext dbContext,
+        TTenantKey tenantId,
+        LambdaExpression keySelector,
+        CancellationToken cancellationToken)
+        where TDbContext : DbContext
+        where TCacheEntity : class, ITenantCacheEntity<TTenantKey>
+        where TTenantKey : notnull
+    {
+        var entityType = dbContext.Model.FindEntityType(typeof(TCacheEntity))
+            ?? throw new InvalidOperationException($"Entity type {typeof(TCacheEntity).Name} is not in the EF model.");
+        var tableName = entityType.GetTableName()
+            ?? throw new InvalidOperationException($"Entity type {typeof(TCacheEntity).Name} is not mapped to a table.");
+        var table = StoreObjectIdentifier.Table(tableName, entityType.GetSchema());
+        var tenantProperty = entityType.FindProperty(nameof(ITenantCacheEntity<>.TenantId))
+            ?? throw new InvalidOperationException($"The {nameof(ITenantCacheEntity<>.TenantId)} property is not mapped.");
+        var staleProperty = entityType.FindProperty(nameof(ICacheEntity.IsStale))
+            ?? throw new InvalidOperationException($"The {nameof(ICacheEntity.IsStale)} property is not mapped.");
+        var keyProperties = GetSelectedProperties(entityType, keySelector, "key");
+        var sqlHelper = dbContext.GetService<ISqlGenerationHelper>();
+        var tenantColumn = sqlHelper.DelimitIdentifier(GetColumnName(tenantProperty, table, tableName));
+        var staleColumn = sqlHelper.DelimitIdentifier(GetColumnName(staleProperty, table, tableName));
+        var orderColumns = new[] { tenantProperty }.Concat(keyProperties).Distinct()
+            .Select(property => sqlHelper.DelimitIdentifier(GetColumnName(property, table, tableName)));
+        var quotedTable = sqlHelper.DelimitIdentifier(tableName, entityType.GetSchema());
+        var commandText = $"SELECT * FROM {quotedTable} WHERE {tenantColumn} = @tenant AND {staleColumn} = TRUE " +
+            $"ORDER BY {string.Join(", ", orderColumns)} FOR UPDATE";
+        var converter = tenantProperty.GetRelationalTypeMapping().Converter;
+        var providerTenantId = converter is null ? tenantId : converter.ConvertToProvider(tenantId);
+        var parameter = new NpgsqlParameter("tenant", providerTenantId ?? DBNull.Value);
+        return await dbContext.Set<TCacheEntity>()
+            .FromSqlRaw(commandText, parameter)
+            .AsNoTracking()
+            .ToArrayAsync(cancellationToken);
+    }
+
+    private static string GetColumnName(IProperty property, StoreObjectIdentifier table, string tableName) =>
+        property.GetColumnName(table)
+        ?? throw new InvalidOperationException($"Property {property.Name} is not mapped to table {tableName}.");
+
+    private static IProperty[] GetSelectedProperties(IEntityType entityType, LambdaExpression selector, string purpose)
     {
         var members = new List<PropertyInfo>();
         CollectProperties(selector.Body, members);
         if (members.Count == 0)
         {
-            throw new ArgumentException("The key selector must select one or more mapped properties.", nameof(selector));
+            throw new ArgumentException($"The {purpose} selector must select one or more mapped properties.", nameof(selector));
         }
 
         return members.Select(member =>
@@ -150,6 +190,38 @@ internal static class PostgreSqlStaleUpsert
                 ? property
                 : throw new ArgumentException($"Property {member.Name} is not mapped on {entityType.ClrType.Name}.", nameof(selector));
         }).Distinct().ToArray();
+    }
+
+    private static IProperty[] GetFactProperties(
+        IEntityType entityType,
+        LambdaExpression selector,
+        IProperty[] conflictProperties,
+        IProperty tenantProperty,
+        IProperty staleProperty,
+        StoreObjectIdentifier table)
+    {
+        var properties = GetSelectedProperties(entityType, selector, "fact");
+        var rootType = entityType.GetRootType();
+        var discriminatorName = rootType.GetDiscriminatorPropertyName();
+        var discriminatorProperty = discriminatorName is null ? null : rootType.FindProperty(discriminatorName);
+        foreach (var property in properties)
+        {
+            if (property == tenantProperty || property == staleProperty || conflictProperties.Contains(property) ||
+                property == discriminatorProperty || property.ValueGenerated != ValueGenerated.Never ||
+                property.GetComputedColumnSql(table) is not null)
+            {
+                throw new ArgumentException(
+                    $"Fact property {property.Name} must not be a tenant, key, stale, generated, computed, or discriminator property.",
+                    nameof(selector));
+            }
+
+            if (property.GetColumnName(table) is null)
+            {
+                throw new ArgumentException($"Fact property {property.Name} is not mapped to the cache table.", nameof(selector));
+            }
+        }
+
+        return properties;
     }
 
     private static void CollectProperties(Expression expression, ICollection<PropertyInfo> properties)
@@ -174,7 +246,7 @@ internal static class PostgreSqlStaleUpsert
                 }
                 break;
             default:
-                throw new ArgumentException("The key selector must select mapped properties.", nameof(expression));
+                throw new ArgumentException("The selector must select mapped properties.", nameof(expression));
         }
     }
 
@@ -222,58 +294,42 @@ internal static class PostgreSqlStaleUpsert
                 return runtimeType.GetDiscriminatorValue();
             }
 
-            var value = dbContext.Entry(row).Property(property.Name).CurrentValue;
-            if (value is null && !property.IsNullable && property.GetDefaultValue() is null)
+            var defaultValue = property.FindAnnotation(RelationalAnnotationNames.DefaultValue);
+            if (defaultValue is null)
             {
                 throw new InvalidOperationException(
-                    $"Required shadow property {property.Name} on {entityType.ClrType.Name} needs a value or a database default for stale-row upserts.");
+                    $"Shadow property {property.Name} on {entityType.ClrType.Name} needs a configured default for an upsert.");
             }
 
-            return value ?? property.GetDefaultValue();
+            return defaultValue.Value;
         }
 
         return property.GetGetter().GetClrValue(row);
     }
 
-    private static void SynchronizeTrackedRows<TDbContext, TCacheEntity, TTenantKey>(
-        TDbContext dbContext,
-        TTenantKey tenantId,
-        TCacheEntity[] rows,
-        IProperty[] conflictProperties,
-        IProperty tenantProperty,
-        IProperty staleProperty,
-        IEntityType entityType)
-        where TDbContext : DbContext
-        where TCacheEntity : class, ITenantCacheEntity<TTenantKey>
-        where TTenantKey : notnull
+    private sealed class ConflictKeyComparer(IProperty[] properties) : IEqualityComparer<object?[]>
     {
-        var identities = rows.Select(row => conflictProperties
-            .Select(property => property == tenantProperty ? tenantId : GetPropertyValue(dbContext, row, property, entityType))
-            .ToArray()).ToArray();
-
-        foreach (var entry in dbContext.ChangeTracker.Entries<TCacheEntity>().ToArray())
+        public bool Equals(object?[]? left, object?[]? right)
         {
-            if (entry.State == EntityState.Detached) continue;
-
-            var matches = identities.Any(identity => conflictProperties.Select((property, index) =>
-                ValuesEqual(property, entry.Property(property.Name).CurrentValue, identity[index])).All(match => match));
-            if (!matches) continue;
-            if (entry.State is EntityState.Added or EntityState.Deleted)
+            if (ReferenceEquals(left, right)) return true;
+            if (left is null || right is null) return false;
+            for (var i = 0; i < properties.Length; i++)
             {
-                entry.State = EntityState.Detached;
-                continue;
+                var comparer = properties[i].GetKeyValueComparer() ?? properties[i].GetValueComparer();
+                if (!(comparer?.Equals(left[i], right[i]) ?? object.Equals(left[i], right[i]))) return false;
             }
-
-            var staleEntry = entry.Property(staleProperty.Name);
-            staleEntry.CurrentValue = true;
-            staleEntry.OriginalValue = true;
-            staleEntry.IsModified = false;
+            return true;
         }
-    }
 
-    private static bool ValuesEqual(IProperty property, object? left, object? right)
-    {
-        var comparer = property.GetKeyValueComparer() ?? property.GetValueComparer();
-        return comparer?.Equals(left, right) ?? Equals(left, right);
+        public int GetHashCode(object?[] key)
+        {
+            var hash = new HashCode();
+            for (var i = 0; i < properties.Length; i++)
+            {
+                var comparer = properties[i].GetKeyValueComparer() ?? properties[i].GetValueComparer();
+                hash.Add(key[i] is null ? 0 : comparer?.GetHashCode(key[i]) ?? key[i]!.GetHashCode());
+            }
+            return hash.ToHashCode();
+        }
     }
 }

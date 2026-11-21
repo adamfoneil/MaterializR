@@ -22,6 +22,12 @@ public class ApplicationDbContext(
     public DbSet<AppointmentItem> AppointmentItems { get; set; }
     public DbSet<AppointmentPriceCache> AppointmentPrices { get; set; }
 
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<AppointmentPriceCache>().HasIndex(row => new { row.TenantId, row.AppointmentId }).IsUnique();
+        modelBuilder.Entity<PointsCache>().HasIndex(row => new { row.TenantId, row.Date, row.TransportId }).IsUnique();
+    }
+
     /// <summary>
     /// Saves changes and marks the affected cache rows of <paramref name="tenantId"/> as stale.
     /// Clients that want to prevent cache rows being missed can disable the parameterless SaveChanges methods

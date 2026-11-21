@@ -7,6 +7,8 @@ namespace MaterializR.PostgreSql;
 
 /// <summary>
 /// PostgreSQL implementation of stale-row upserts for a set cache.
+/// Upserts bypass EF tracking; tracked entities can remain stale and should be reloaded as needed.
+/// Inserted shadow properties require a configured default, except for the discriminator.
 /// The mapped tenant and non-nullable dimension columns must have a matching unique key or index.
 /// </summary>
 public abstract class PostgreSqlSetCache<TDbContext, TCacheEntity, TCacheDimensions, TTenantKey>(
@@ -23,6 +25,15 @@ public abstract class PostgreSqlSetCache<TDbContext, TCacheEntity, TCacheDimensi
     /// </summary>
     protected abstract Expression<Func<TCacheEntity, object?>> DimensionsKeySelector { get; }
 
+    /// <summary>Selects the mapped fact properties written by refresh upserts.</summary>
+    protected abstract Expression<Func<TCacheEntity, object?>> FactProperties { get; }
+
     protected sealed override Task UpsertStaleAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] rows, CancellationToken cancellationToken) =>
-        PostgreSqlStaleUpsert.ExecuteAsync(dbContext, tenantId, rows, DimensionsKeySelector, cancellationToken);
+        PostgreSqlStaleUpsert.ExecuteAsync(dbContext, tenantId, rows, DimensionsKeySelector, FactProperties, refresh: false, cancellationToken);
+
+    protected sealed override Task UpsertFactsAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] rows, CancellationToken cancellationToken) =>
+        PostgreSqlStaleUpsert.ExecuteAsync(dbContext, tenantId, rows, DimensionsKeySelector, FactProperties, refresh: true, cancellationToken);
+
+    protected sealed override Task<TCacheEntity[]> LockStaleRowsAsync(TDbContext dbContext, TTenantKey tenantId, CancellationToken cancellationToken) =>
+        PostgreSqlStaleUpsert.LockStaleRowsAsync<TDbContext, TCacheEntity, TTenantKey>(dbContext, tenantId, DimensionsKeySelector, cancellationToken);
 }

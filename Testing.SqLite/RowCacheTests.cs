@@ -1,7 +1,9 @@
 using Demo;
 using Demo.Cache;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Testing;
 
@@ -287,6 +289,125 @@ public sealed class RowCacheTests
         Assert.IsFalse(refreshed.IsStale);
     }
 
+    [TestMethod]
+    public async Task UpsertFacts_ForeignKeyFailurePropagatesWithoutTrackingRows()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+        var logger = new RecordingLogger(LogLevel.Error);
+        var cache = new TestableAppointmentPriceRowCache(logger, factory);
+
+        await Assert.ThrowsExactlyAsync<SqliteException>(() =>
+            cache.RefreshForTestAsync(db, Tenant, [new AppointmentPriceCache { AppointmentId = 12345, TotalPrice = 42m }]));
+
+        Assert.AreEqual(0, db.ChangeTracker.Entries<AppointmentPriceCache>().Count());
+        Assert.AreEqual(0, await db.AppointmentPrices.CountAsync());
+    }
+
+    [TestMethod]
+    public async Task Upserts_DoNotModifyTrackedRowsOrSaveUnrelatedChanges()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var appointment = NewAppointment(Tenant, 10m);
+        db.Appointments.Add(appointment);
+        await db.SaveChangesAsync();
+        var tracked = new AppointmentPriceCache { TenantId = Tenant, AppointmentId = appointment.Id, TotalPrice = 7m, IsStale = false };
+        db.AppointmentPrices.Add(tracked);
+        await db.SaveChangesAsync();
+        var unsaved = NewAppointment(Tenant, 30m);
+        db.Appointments.Add(unsaved);
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+        var cache = new TestableAppointmentPriceRowCache(new RecordingLogger(LogLevel.Error), factory);
+
+        await cache.MarkStaleKeysAsync(db, Tenant, [appointment.Id, appointment.Id]);
+        Assert.IsFalse(tracked.IsStale);
+        Assert.AreEqual(EntityState.Unchanged, db.Entry(tracked).State);
+        var marked = await db.AppointmentPrices.AsNoTracking().SingleAsync();
+        Assert.IsTrue(marked.IsStale);
+        Assert.AreEqual(7m, marked.TotalPrice);
+
+        await cache.RefreshForTestAsync(db, Tenant,
+        [
+            new AppointmentPriceCache { AppointmentId = appointment.Id, TotalPrice = 11m },
+            new AppointmentPriceCache { AppointmentId = appointment.Id, TotalPrice = 42m }
+        ]);
+        var refreshed = await db.AppointmentPrices.AsNoTracking().SingleAsync();
+        Assert.AreEqual(42m, refreshed.TotalPrice);
+        Assert.IsFalse(refreshed.IsStale);
+        Assert.AreEqual(7m, tracked.TotalPrice);
+        Assert.IsFalse(tracked.IsStale);
+        Assert.AreEqual(EntityState.Unchanged, db.Entry(tracked).State);
+        Assert.AreEqual(EntityState.Added, db.Entry(unsaved).State);
+        Assert.AreEqual(1, await db.Appointments.AsNoTracking().CountAsync());
+    }
+
+    [TestMethod]
+    public async Task UpsertFacts_LaterFailureRollsBackEarlierRows()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var appointment = NewAppointment(Tenant, 10m);
+        db.Appointments.Add(appointment);
+        await db.SaveChangesAsync();
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+        var cache = new TestableAppointmentPriceRowCache(new RecordingLogger(LogLevel.Error), factory);
+
+        await Assert.ThrowsExactlyAsync<SqliteException>(() => cache.RefreshForTestAsync(db, Tenant,
+        [
+            new AppointmentPriceCache { AppointmentId = appointment.Id, TotalPrice = 20m },
+            new AppointmentPriceCache { AppointmentId = 12345, TotalPrice = 42m }
+        ]));
+
+        Assert.AreEqual(0, await db.AppointmentPrices.CountAsync());
+    }
+
+    [TestMethod]
+    public async Task MarkStale_ConcurrentContextsUseOneCacheKey()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var setup = await InitDbAsync(scope);
+        var appointment = NewAppointment(Tenant, 10m);
+        setup.Appointments.Add(appointment);
+        await setup.SaveChangesAsync();
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+        var cache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
+
+        async Task MarkAsync()
+        {
+            await using var db = factory.CreateDbContext();
+            await cache.MarkStaleKeysAsync(db, Tenant, [appointment.Id]);
+        }
+
+        await Task.WhenAll(MarkAsync(), MarkAsync());
+
+        var rows = await setup.AppointmentPrices.AsNoTracking().ToArrayAsync();
+        Assert.HasCount(1, rows);
+        Assert.AreEqual(appointment.Id, rows[0].AppointmentId);
+        Assert.IsTrue(rows[0].IsStale);
+    }
+
+    private sealed class TestableAppointmentPriceRowCache(
+        ILogger<AppointmentPriceRowCache> logger, IDbContextFactory<ApplicationDbContext> factory)
+        : AppointmentPriceRowCache(logger, factory)
+    {
+        public Task RefreshForTestAsync(ApplicationDbContext db, int tenantId, AppointmentPriceCache[] rows) =>
+            UpsertFactsAsync(db, tenantId, rows, CancellationToken.None);
+    }
+
+    private sealed class RecordingLogger(LogLevel minimumLevel) : ILogger<AppointmentPriceRowCache>
+    {
+        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= minimumLevel;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (IsEnabled(logLevel)) Entries.Add((logLevel, formatter(state, exception), exception));
+        }
+    }
+
     private sealed class ConfiguredContextFactory(
         IDbContextFactory<ApplicationDbContext> inner, bool noTracking, bool autoDetectChanges) : IDbContextFactory<ApplicationDbContext>
     {
@@ -321,6 +442,60 @@ public sealed class RowCacheTests
         var persisted = await db.AppointmentPrices.AsNoTracking().SingleAsync(p => p.TenantId == Tenant);
         Assert.AreEqual(20m, persisted.TotalPrice);
         Assert.IsFalse(persisted.IsStale);
+    }
+
+    [TestMethod]
+    public async Task UpdateAsync_RemovesOnlySelectedRowsWithoutLiveData()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var mine = NewAppointment(Tenant, 10m);
+        var theirs = NewAppointment(OtherTenant, 20m);
+        db.Appointments.AddRange(mine, theirs);
+        await db.SaveChangesAsync();
+        var normalCache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
+        await normalCache.MarkStaleKeysAsync(db, Tenant, [mine.Id]);
+        await normalCache.MarkStaleKeysAsync(db, OtherTenant, [theirs.Id]);
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<AppointmentPriceRowCache>>();
+        var cache = new MissingLiveAppointmentPriceRowCache(logger, factory);
+
+        Assert.AreEqual(1, await cache.UpdateAsync(Tenant));
+
+        var rows = await db.AppointmentPrices.AsNoTracking().ToArrayAsync();
+        Assert.HasCount(1, rows);
+        Assert.AreEqual(OtherTenant, rows[0].TenantId);
+        Assert.IsTrue(rows[0].IsStale);
+    }
+
+    [TestMethod]
+    public async Task GetAsync_LeavesRowStaleWhenLiveDataIsMissing()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var appointment = NewAppointment(Tenant, 10m);
+        db.Appointments.Add(appointment);
+        await db.SaveChangesAsync();
+        var normalCache = scope.ServiceProvider.GetRequiredService<AppointmentPriceRowCache>();
+        await normalCache.MarkStaleKeysAsync(db, Tenant, [appointment.Id]);
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+        var logger = new RecordingLogger(LogLevel.Warning);
+        var cache = new MissingLiveAppointmentPriceRowCache(logger, factory);
+
+        var result = await cache.GetAsync(Tenant, appointment.Id);
+
+        Assert.IsNotNull(result);
+        Assert.IsTrue(result.IsStale);
+        Assert.IsTrue((await db.AppointmentPrices.AsNoTracking().SingleAsync()).IsStale);
+        Assert.AreEqual(LogLevel.Warning, logger.Entries.Single().Level);
+    }
+
+    private sealed class MissingLiveAppointmentPriceRowCache(
+        ILogger<AppointmentPriceRowCache> logger, IDbContextFactory<ApplicationDbContext> factory)
+        : AppointmentPriceRowCache(logger, factory)
+    {
+        protected override Task<AppointmentPriceCache[]> QueryLiveAsync(ApplicationDbContext dbContext, int tenantId, int[] keys, CancellationToken cancellationToken) =>
+            Task.FromResult(Array.Empty<AppointmentPriceCache>());
     }
 
     private static Appointment NewAppointment(int tenantId, decimal unitPrice) => new()

@@ -10,22 +10,6 @@ public class PointsSetCache(
 {
     private record DailyPointLimitDto(DateOnly Date, int Maximum);
 
-    protected override Task<PointsCache[]> ExistingRowsAsync(ApplicationDbContext dbContext, int tenantId, PointsCache.Dimensions[] dimensions, CancellationToken cancellationToken)
-    {
-        if (dimensions.Length == 0)
-        {
-            return Task.FromResult(Array.Empty<PointsCache>());
-        }
-
-        var uniqueDimensions = dimensions.Distinct().ToArray();
-        var dates = uniqueDimensions.Select(d => d.Date).Distinct().ToArray();
-        var transportIds = uniqueDimensions.Select(d => d.TransportId).Distinct().ToArray();
-
-        return dbContext.PointsCache
-            .Where(row => row.TenantId == tenantId && dates.Contains(row.Date) && transportIds.Contains(row.TransportId))
-            .ToArrayAsync(cancellationToken);
-    }
-
     private static async Task<DailyPointLimitDto[]> DailyPointLimitsAsync(ApplicationDbContext db, int tenantId, DateOnly from, DateOnly to, CancellationToken cancellationToken)
     {
         if (to < from)
@@ -105,12 +89,6 @@ public class PointsSetCache(
 
     protected override DbSet<PointsCache> CacheDbSet(ApplicationDbContext db) => db.PointsCache;
 
-    protected override void UpdateFacts(PointsCache existingRow, PointsCache incomingRow)
-    {
-        existingRow.Maximum = incomingRow.Maximum;
-        existingRow.Scheduled = incomingRow.Scheduled;
-    }
-
     protected override PointsCache FromDimensions(PointsCache.Dimensions dimensions) => new()
     {
         Date = dimensions.Date,
@@ -119,22 +97,14 @@ public class PointsSetCache(
 
     protected override PointsCache.Dimensions ToDimensions(PointsCache entity) => new(entity.Date, entity.TransportId);
 
-    protected override async Task UpsertStaleAsync(ApplicationDbContext dbContext, int tenantId, PointsCache[] rows, CancellationToken cancellationToken)
-    {
-        var dimensions = rows.Select(ToDimensions).ToHashSet();
-        var existingRows = await ExistingRowsAsync(dbContext, tenantId, [.. dimensions], cancellationToken);
-        var existingDimensions = existingRows.Select(ToDimensions).ToHashSet();
+    protected override Task UpsertStaleAsync(ApplicationDbContext dbContext, int tenantId, PointsCache[] rows, CancellationToken cancellationToken) =>
+        UpsertAsync(dbContext, tenantId, rows, refresh: false, cancellationToken);
 
-        foreach (var existing in existingRows)
-        {
-            if (dimensions.Contains(ToDimensions(existing)))
-            {
-                existing.IsStale = true;
-                dbContext.Entry(existing).Property(row => row.IsStale).IsModified = true;
-            }
-        }
+    protected override Task UpsertFactsAsync(ApplicationDbContext dbContext, int tenantId, PointsCache[] rows, CancellationToken cancellationToken) =>
+        UpsertAsync(dbContext, tenantId, rows, refresh: true, cancellationToken);
 
-        dbContext.PointsCache.AddRange(rows.Where(row => !existingDimensions.Contains(ToDimensions(row))));
-        await dbContext.SaveChangesAsync(cancellationToken);
-    }
+    private static Task UpsertAsync(ApplicationDbContext dbContext, int tenantId, PointsCache[] rows, bool refresh, CancellationToken cancellationToken) =>
+        SqliteUpsert.ExecuteAsync(dbContext, rows, row =>
+            $"INSERT INTO \"PointsCache\" (\"TenantId\", \"Date\", \"TransportId\", \"Maximum\", \"Scheduled\", \"Available\", \"PercentFree\", \"IsStale\") VALUES ({tenantId}, {row.Date}, {row.TransportId}, {row.Maximum}, {row.Scheduled}, {row.Available}, {row.PercentFree}, {!refresh}) ON CONFLICT (\"TenantId\", \"Date\", \"TransportId\") DO UPDATE SET \"Maximum\" = CASE WHEN {refresh} THEN excluded.\"Maximum\" ELSE \"Maximum\" END, \"Scheduled\" = CASE WHEN {refresh} THEN excluded.\"Scheduled\" ELSE \"Scheduled\" END, \"IsStale\" = excluded.\"IsStale\"",
+            cancellationToken);
 }
