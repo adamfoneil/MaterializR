@@ -45,6 +45,11 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
 
     protected abstract Expression<Func<TCacheEntity, TKey>> KeySelector { get; }
 
+    /// <summary>
+    /// changes updated from the last Update call
+    /// </summary>
+    public Dictionary<TKey, TCacheEntity> UpdatedRows { get; private set; } = [];
+
     public async Task MarkStaleKeysAsync(TDbContext dbContext, TTenantKey tenantId, TKey[] keys, CancellationToken cancellationToken = default)
     {
         if (!keys.Any()) return;
@@ -156,6 +161,8 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
                 var orphans = staleRows.Where(row => !refreshed.Contains(keySelector(row))).ToArray();
                 var deleted = await Util.DeleteStaleRowsAsync(db, CacheDbSet(db), tenantId, orphans, cancellationToken);
                 await txn.CommitAsync(cancellationToken);
+
+                UpdatedRows = liveData.ToDictionary(keySelector, row => row);
 
                 return liveData.Length + deleted;
             }
