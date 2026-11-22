@@ -78,7 +78,27 @@ public async Task<int> SaveChangesAsync(int tenantId, CancellationToken cancella
 
 ## PostgreSQL
 
-Reference [MaterializR.PostgreSql](MaterializR.PostgreSql) for abstract PostgreSQL cache bases. Both marking stale and refreshing use `INSERT ... ON CONFLICT ... DO UPDATE` and require a unique key or index on the tenant column plus the non-nullable cache key/dimension columns. Marking preserves existing facts; refresh replaces the properties selected by `FactProperties` and clears `IsStale`. Refresh writes the selected values directly from `QueryLiveAsync`, so any transformations must be applied in the live query. The fact selector must include exactly the writable facts to refresh. The bases also take the key/dimension property selector used to identify the unique constraint and use EF relational metadata and the supplied context's connection and active transaction. Refresh locks the selected stale rows until commit so concurrent markers are not lost. Non-discriminator shadow properties used in inserts require a configured constant default.
+Reference [MaterializR.PostgreSql](MaterializR.PostgreSql) for abstract PostgreSQL cache bases. Both marking stale and refreshing use `INSERT ... ON CONFLICT ... DO UPDATE` and require a unique key or index on the tenant column plus the non-nullable cache key/dimension columns. Marking preserves existing facts; refresh replaces the properties selected by `FactProperties` and clears `IsStale`. Refresh writes the selected values directly from `QueryLiveAsync`, so any transformations must be applied in the live query. The fact selector must include exactly the writable scalar facts to refresh. The bases also take the key/dimension property selector used to identify the unique constraint and use EF relational metadata and the supplied context's connection and active transaction. Refresh locks the selected stale rows until commit so concurrent markers are not lost. Non-discriminator shadow properties used in inserts require a configured constant default.
+
+Both PostgreSQL cache bases optionally expose `JsonFacts` for JSON collections or other values stored in `jsonb` columns. For example, with EF owned collections mapped using `ToJson`:
+
+```csharp
+// In OnModelCreating:
+modelBuilder.Entity<AppointmentInfo>().OwnsMany(x => x.CompletedItems, b => b.ToJson("CompletedItems"));
+modelBuilder.Entity<AppointmentInfo>().OwnsMany(x => x.PurchasedItems, b => b.ToJson("PurchasedItems"));
+
+// In the PostgreSQL row cache:
+protected override Expression<Func<AppointmentInfo, object?>> FactProperties =>
+    row => new { row.PendingTotal, row.WorkingDaysAway };
+
+protected override IReadOnlyList<JsonFact<AppointmentInfo>> JsonFacts =>
+[
+    new("CompletedItems", row => JsonSerializer.Serialize(row.CompletedItems)),
+    new("PurchasedItems", row => JsonSerializer.Serialize(row.PurchasedItems))
+];
+```
+
+Names in `JsonFacts` are the actual mapped database column names, including casing; don't also select those columns in `FactProperties`. The serializer must produce the JSON shape expected by the EF mapping, including any configured JSON property names. EF still needs a compatible mapping to read the values during refresh and cache retrieval. A serializer returning `null` writes SQL NULL; return `"null"` for JSON null. It is called for both live rows and placeholder rows from `FromKey` or `FromDimensions`, so placeholders must produce values valid for the column's constraints (for collections, typically `[]`). Existing JSON values are preserved on stale conflicts and replaced on refresh. If a cache has only JSON facts, use `row => new { }` for `FactProperties`.
 
 ## SQLite
 

@@ -20,6 +20,7 @@ internal static class PostgreSqlStaleUpsert
         TCacheEntity[] rows,
         LambdaExpression keySelector,
         LambdaExpression factSelector,
+        IReadOnlyList<JsonFact<TCacheEntity>> jsonFacts,
         bool refresh,
         CancellationToken cancellationToken)
         where TDbContext : DbContext
@@ -40,7 +41,8 @@ internal static class PostgreSqlStaleUpsert
             ?? throw new InvalidOperationException($"The {nameof(ICacheEntity.IsStale)} property is not mapped.");
         var identityProperties = GetSelectedProperties(entityType, keySelector, "key");
         var conflictProperties = new[] { tenantProperty }.Concat(identityProperties).Distinct().ToArray();
-        var factProperties = GetFactProperties(entityType, factSelector, conflictProperties, tenantProperty, staleProperty, table);
+        ArgumentNullException.ThrowIfNull(jsonFacts);
+        var factProperties = GetFactProperties(entityType, factSelector, conflictProperties, tenantProperty, staleProperty, table, jsonFacts.Count > 0);
         EnsureUniqueConflictTarget(entityType, conflictProperties);
 
         var runtimeEntityTypes = rows
@@ -52,10 +54,12 @@ internal static class PostgreSqlStaleUpsert
             throw new InvalidOperationException("All cache row types in an upsert must map to the same table and schema.");
         }
 
-        var mappedColumns = runtimeEntityTypes.SelectMany(rowType => rowType.GetProperties())
-            .Distinct()
+        var allProperties = runtimeEntityTypes.SelectMany(rowType => rowType.GetProperties()).Distinct().ToArray();
+        ValidateJsonFacts(dbContext, entityType, table, jsonFacts, allProperties, factProperties, conflictProperties, tenantProperty, staleProperty);
+        var jsonColumnNames = jsonFacts.Select(fact => fact.ColumnName).ToHashSet(StringComparer.Ordinal);
+        var mappedColumns = allProperties
             .Select(property => (Property: property, Column: property.GetColumnName(table)))
-            .Where(item => item.Column is not null)
+            .Where(item => item.Column is not null && !jsonColumnNames.Contains(item.Column))
             .Where(item =>
                 item.Property == staleProperty ||
                 item.Property == tenantProperty ||
@@ -70,13 +74,15 @@ internal static class PostgreSqlStaleUpsert
 
         var sqlHelper = dbContext.GetService<ISqlGenerationHelper>();
         var quotedTable = sqlHelper.DelimitIdentifier(tableName, schema);
-        var insertColumns = mappedColumns.Select(item => sqlHelper.DelimitIdentifier(item.Column!)).ToArray();
+        var insertColumns = mappedColumns.Select(item => sqlHelper.DelimitIdentifier(item.Column!))
+            .Concat(jsonFacts.Select(fact => sqlHelper.DelimitIdentifier(fact.ColumnName))).ToArray();
         var conflictColumns = conflictProperties.Select(property =>
             sqlHelper.DelimitIdentifier(GetColumnName(property, table, tableName))).ToArray();
         var staleColumn = sqlHelper.DelimitIdentifier(GetColumnName(staleProperty, table, tableName));
         var assignments = refresh
-            ? string.Join(", ", factProperties
-                .Select(property => $"{sqlHelper.DelimitIdentifier(GetColumnName(property, table, tableName))} = EXCLUDED.{sqlHelper.DelimitIdentifier(GetColumnName(property, table, tableName))}")
+            ? string.Join(", ", factProperties.Select(property => GetColumnName(property, table, tableName))
+                .Concat(jsonFacts.Select(fact => fact.ColumnName))
+                .Select(column => $"{sqlHelper.DelimitIdentifier(column)} = EXCLUDED.{sqlHelper.DelimitIdentifier(column)}")
                 .Append($"{staleColumn} = FALSE"))
             : $"{staleColumn} = TRUE";
         // PostgreSQL cannot update a conflict target twice in one INSERT; the last row wins.
@@ -89,7 +95,7 @@ internal static class PostgreSqlStaleUpsert
         }
         rows = [.. uniqueRows.Values];
         var connection = dbContext.Database.GetDbConnection();
-        var batchSize = Math.Max(1, MaxParametersPerCommand / mappedColumns.Length);
+        var batchSize = Math.Max(1, MaxParametersPerCommand / insertColumns.Length);
         IDbContextTransaction? transaction = null;
         try
         {
@@ -111,7 +117,7 @@ internal static class PostgreSqlStaleUpsert
                             : GetPropertyValue(dbContext, row, property, entityType);
                     var converter = property.GetRelationalTypeMapping().Converter;
                     return converter is null ? value : converter.ConvertToProvider(value);
-                }).ToArray());
+                }).Concat(jsonFacts.Select(fact => (object?)new JsonbParameter(fact.Serialize(row)))).ToArray());
 
                 var (commandText, parameters) = UpsertSql.Statement(quotedTable, insertColumns, conflictColumns, assignments, values);
                 await connection.ExecuteAsync(new CommandDefinition(
@@ -174,11 +180,50 @@ internal static class PostgreSqlStaleUpsert
         property.GetColumnName(table)
         ?? throw new InvalidOperationException($"Property {property.Name} is not mapped to table {tableName}.");
 
-    private static IProperty[] GetSelectedProperties(IEntityType entityType, LambdaExpression selector, string purpose)
+    private static void ValidateJsonFacts<TCacheEntity>(
+        DbContext dbContext, IEntityType entityType, StoreObjectIdentifier table,
+        IReadOnlyList<JsonFact<TCacheEntity>> jsonFacts, IProperty[] properties, IProperty[] factProperties,
+        IProperty[] conflictProperties, IProperty tenantProperty, IProperty staleProperty)
+    {
+        if (jsonFacts.Count == 0) return;
+
+        var mappedTable = dbContext.Model.GetRelationalModel().FindTable(table.Name, table.Schema)
+            ?? throw new InvalidOperationException($"Table {table.Name} is not in the EF relational model.");
+        var discriminatorName = entityType.GetRootType().GetDiscriminatorPropertyName();
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fact in jsonFacts)
+        {
+            if (fact is null || string.IsNullOrWhiteSpace(fact.ColumnName) || fact.Serialize is null)
+            {
+                throw new ArgumentException("Each JSON fact must have a column name and serializer.", nameof(jsonFacts));
+            }
+            if (!names.Add(fact.ColumnName))
+            {
+                throw new ArgumentException($"JSON fact column {fact.ColumnName} is specified more than once.", nameof(jsonFacts));
+            }
+
+            var column = mappedTable.FindColumn(fact.ColumnName);
+            if (column is null || !string.Equals(column.StoreType, "jsonb", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException($"JSON fact column {fact.ColumnName} must be a mapped jsonb column on table {table.Name}.", nameof(jsonFacts));
+            }
+
+            var columnProperties = properties.Where(property => property.GetColumnName(table) == fact.ColumnName);
+            if (columnProperties.Any(property => property == tenantProperty || property == staleProperty ||
+                conflictProperties.Contains(property) || factProperties.Contains(property) ||
+                property.Name == discriminatorName || property.ValueGenerated != ValueGenerated.Never ||
+                property.GetComputedColumnSql(table) is not null))
+            {
+                throw new ArgumentException($"JSON fact column {fact.ColumnName} conflicts with a scalar fact or a protected or generated column.", nameof(jsonFacts));
+            }
+        }
+    }
+
+    private static IProperty[] GetSelectedProperties(IEntityType entityType, LambdaExpression selector, string purpose, bool allowEmpty = false)
     {
         var members = new List<PropertyInfo>();
         CollectProperties(selector.Body, members);
-        if (members.Count == 0)
+        if (members.Count == 0 && !allowEmpty)
         {
             throw new ArgumentException($"The {purpose} selector must select one or more mapped properties.", nameof(selector));
         }
@@ -198,9 +243,10 @@ internal static class PostgreSqlStaleUpsert
         IProperty[] conflictProperties,
         IProperty tenantProperty,
         IProperty staleProperty,
-        StoreObjectIdentifier table)
+        StoreObjectIdentifier table,
+        bool allowEmpty)
     {
-        var properties = GetSelectedProperties(entityType, selector, "fact");
+        var properties = GetSelectedProperties(entityType, selector, "fact", allowEmpty);
         var rootType = entityType.GetRootType();
         var discriminatorName = rootType.GetDiscriminatorPropertyName();
         var discriminatorProperty = discriminatorName is null ? null : rootType.FindProperty(discriminatorName);

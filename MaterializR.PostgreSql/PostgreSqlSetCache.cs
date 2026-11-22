@@ -25,14 +25,17 @@ public abstract class PostgreSqlSetCache<TDbContext, TCacheEntity, TCacheDimensi
     /// </summary>
     protected abstract Expression<Func<TCacheEntity, object?>> DimensionsKeySelector { get; }
 
-    /// <summary>Selects the mapped fact properties written by refresh upserts.</summary>
+    /// <summary>Selects the mapped scalar fact properties written by refresh upserts.</summary>
     protected abstract Expression<Func<TCacheEntity, object?>> FactProperties { get; }
 
+    /// <summary>Provides serialized values for mapped jsonb fact columns.</summary>
+    protected virtual IReadOnlyList<JsonFact<TCacheEntity>> JsonFacts => [];
+
     protected sealed override Task UpsertStaleAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] rows, CancellationToken cancellationToken) =>
-        PostgreSqlStaleUpsert.ExecuteAsync(dbContext, tenantId, rows, DimensionsKeySelector, FactProperties, refresh: false, cancellationToken);
+        PostgreSqlStaleUpsert.ExecuteAsync(dbContext, tenantId, rows, DimensionsKeySelector, FactProperties, JsonFacts, refresh: false, cancellationToken);
 
     protected sealed override Task UpsertFactsAsync(TDbContext dbContext, TTenantKey tenantId, TCacheEntity[] rows, CancellationToken cancellationToken) =>
-        PostgreSqlStaleUpsert.ExecuteAsync(dbContext, tenantId, rows, DimensionsKeySelector, FactProperties, refresh: true, cancellationToken);
+        PostgreSqlStaleUpsert.ExecuteAsync(dbContext, tenantId, rows, DimensionsKeySelector, FactProperties, JsonFacts, refresh: true, cancellationToken);
 
     protected sealed override Task<TCacheEntity[]> LockStaleRowsAsync(TDbContext dbContext, TTenantKey tenantId, CancellationToken cancellationToken) =>
         PostgreSqlStaleUpsert.LockStaleRowsAsync<TDbContext, TCacheEntity, TTenantKey>(dbContext, tenantId, DimensionsKeySelector, cancellationToken);
