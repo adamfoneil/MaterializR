@@ -4,7 +4,7 @@ Trigger-based solutions can work, but are complex and maintenance-intensive. The
 
 What if you wanted a more generic approach that leverages native EF Core functionality? That's what MaterializR is for.
 
-NuGet: [EFCore.MaterializR](https://www.nuget.org/packages/EFCore.MaterializR)
+NuGet package for PostgreSQL: [EFCore.MaterializR.PostgreSql](https://www.nuget.org/packages/EFCore.MaterializR.PostgreSql)
 
 MaterializR provides two cache-table abstractions and an inline cache abstraction:
 - [SetCache](MaterializR.Core/SetCache.cs) manages calculations based on sets of rows along one or more _dimensions_ with one or more _facts_. This kind of cache can be called a "rollup." An example would be total sales by region and year.
