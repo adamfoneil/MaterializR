@@ -306,7 +306,7 @@ internal static class PostgreSqlStaleUpsert
             index.IsUnique &&
             index.GetFilter() is null &&
             index.Properties.ToHashSet().SetEquals(properties) &&
-            index.Properties.All(property => !property.IsNullable));
+            index.Properties.All(property => property is IProperty indexProperty && !indexProperty.IsNullable));
 
         if (!hasPrimaryOrAlternateKey && !hasUniqueIndex)
         {
