@@ -87,7 +87,7 @@ internal static class PostgreSqlStaleUpsert
             var key = rowKeyProperties.Select(property => GetPropertyValue(dbContext, row, property, entityType)).ToArray();
             uniqueRows[key] = row;
         }
-        rows = uniqueRows.Values.ToArray();
+        rows = [.. uniqueRows.Values];
         var connection = dbContext.Database.GetDbConnection();
         var batchSize = Math.Max(1, MaxParametersPerCommand / mappedColumns.Length);
         IDbContextTransaction? transaction = null;
@@ -183,13 +183,13 @@ internal static class PostgreSqlStaleUpsert
             throw new ArgumentException($"The {purpose} selector must select one or more mapped properties.", nameof(selector));
         }
 
-        return members.Select(member =>
+        return [.. members.Select(member =>
         {
             var property = entityType.FindProperty(member.Name);
             return property is not null && property.PropertyInfo == member
                 ? property
                 : throw new ArgumentException($"Property {member.Name} is not mapped on {entityType.ClrType.Name}.", nameof(selector));
-        }).Distinct().ToArray();
+        }).Distinct()];
     }
 
     private static IProperty[] GetFactProperties(
