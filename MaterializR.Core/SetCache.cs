@@ -71,12 +71,22 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
     }
 
     /// <summary>
-    /// refreshes the stale rows of a single tenant
+    /// refreshes the stale rows of a single tenant using a new context
     /// </summary>
     public async Task<int> UpdateAsync(TTenantKey tenantId, CancellationToken cancellationToken = default)
     {
         using var db = DbFactory.CreateDbContext();
-        await using var txn = await db.Database.BeginTransactionAsync(cancellationToken);
+        return await UpdateAsync(db, tenantId, cancellationToken);
+    }
+
+    /// <summary>
+    /// refreshes the stale rows of a single tenant using the supplied context
+    /// </summary>
+    /// <remarks>Uses an existing transaction if present; otherwise creates and owns a refresh transaction. The caller retains ownership of the context and any existing transaction.</remarks>
+    public async Task<int> UpdateAsync(TDbContext db, TTenantKey tenantId, CancellationToken cancellationToken = default)
+    {
+        var ownsTransaction = db.Database.CurrentTransaction is null;
+        await using var txn = ownsTransaction ? await db.Database.BeginTransactionAsync(cancellationToken) : null;
 
         return await Util.LogDuration(Logger, async () =>
         {
@@ -86,7 +96,7 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
                 var dimensions = staleRows.Select(ToDimensions).ToHashSet();
                 if (dimensions.Count == 0)
                 {
-                    await txn.CommitAsync(cancellationToken);
+                    if (txn is not null) await txn.CommitAsync(cancellationToken);
                     return 0;
                 }
                 var liveData = (await QueryLiveAsync(db, tenantId, [.. dimensions], cancellationToken))
@@ -97,13 +107,13 @@ public abstract class SetCache<TDbContext, TCacheEntity, TCacheDimensions, TTena
                 var refreshed = liveData.Select(ToDimensions).ToHashSet();
                 var orphans = staleRows.Where(row => !refreshed.Contains(ToDimensions(row))).ToArray();
                 var deleted = await Util.DeleteStaleRowsAsync(db, CacheDbSet(db), tenantId, orphans, cancellationToken);
-                await txn.CommitAsync(cancellationToken);
+                if (txn is not null) await txn.CommitAsync(cancellationToken);
 
                 return liveData.Length + deleted;
             }
             catch (Exception exc)
             {
-                await txn.RollbackAsync(CancellationToken.None);
+                if (txn is not null) await txn.RollbackAsync(CancellationToken.None);
                 Logger.LogError(exc, "Error in UpdateAsync");
                 throw;
             }

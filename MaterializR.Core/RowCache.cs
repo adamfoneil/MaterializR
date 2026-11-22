@@ -128,16 +128,26 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
         CancellationToken cancellationToken = default)
     {
         await MarkStaleWhereAsync(dbContext, tenantId, query, sourceKey, cancellationToken);
-        return await UpdateAsync(tenantId, cancellationToken);
+        return await UpdateAsync(dbContext, tenantId, cancellationToken);
     }
 
     /// <summary>
-    /// refreshes the stale rows of a single tenant
+    /// refreshes the stale rows of a single tenant using a new context
     /// </summary>
     public async Task<int> UpdateAsync(TTenantKey tenantId, CancellationToken cancellationToken = default)
     {
         using var db = DbFactory.CreateDbContext();
-        await using var txn = await db.Database.BeginTransactionAsync(cancellationToken);
+        return await UpdateAsync(db, tenantId, cancellationToken);
+    }
+
+    /// <summary>
+    /// refreshes the stale rows of a single tenant using the supplied context
+    /// </summary>
+    /// <remarks>Uses an existing transaction if present; otherwise creates and owns a refresh transaction. The caller retains ownership of the context and any existing transaction.</remarks>
+    public async Task<int> UpdateAsync(TDbContext db, TTenantKey tenantId, CancellationToken cancellationToken = default)
+    {
+        var ownsTransaction = db.Database.CurrentTransaction is null;
+        await using var txn = ownsTransaction ? await db.Database.BeginTransactionAsync(cancellationToken) : null;
 
         return await Util.LogDuration(Logger, async () =>
         {
@@ -148,7 +158,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
                 var keys = staleRows.Select(keySelector).ToHashSet();
                 if (keys.Count == 0)
                 {
-                    await txn.CommitAsync(cancellationToken);
+                    if (txn is not null) await txn.CommitAsync(cancellationToken);
                     return 0;
                 }
 
@@ -160,7 +170,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
                 var refreshed = liveData.Select(keySelector).ToHashSet();
                 var orphans = staleRows.Where(row => !refreshed.Contains(keySelector(row))).ToArray();
                 var deleted = await Util.DeleteStaleRowsAsync(db, CacheDbSet(db), tenantId, orphans, cancellationToken);
-                await txn.CommitAsync(cancellationToken);
+                if (txn is not null) await txn.CommitAsync(cancellationToken);
 
                 UpdatedRows = liveData.ToDictionary(keySelector, row => row);
 
@@ -168,7 +178,7 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
             }
             catch (Exception exc)
             {
-                await txn.RollbackAsync(CancellationToken.None);
+                if (txn is not null) await txn.RollbackAsync(CancellationToken.None);
                 Logger.LogError(exc, "Error in UpdateAsync");
                 throw;
             }

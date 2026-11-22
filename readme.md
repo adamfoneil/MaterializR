@@ -33,6 +33,7 @@ The [Demo](Demo) project shows how cache rows are marked stale inside `SaveChang
 Caches are tenant-isolated by design. `RowCache` and `SetCache` take a tenant key type parameter (`TTenantKey : notnull`), and every operation takes an explicit `tenantId`:
 - `MarkStaleKeysAsync(db, tenantId, keys)` and `MarkStaleDimensionsAsync(db, tenantId, dimensions)` upsert stale rows only for that tenant. Both return `Task`; they do not report insert/update counts.
 - `UpdateAsync(tenantId)` only refreshes stale rows of that tenant. There is no "all tenants" overload; loop over tenants if you need that (for example in a background job).
+- `UpdateAsync(db, tenantId)` uses the supplied context instead of creating one. It joins an existing transaction without committing or rolling it back; otherwise it creates and owns a refresh transaction. The caller retains ownership of the context and any existing transaction, including handling rollback after errors. Changes must be saved to the database before refresh; unsaved tracked changes are not persisted by the cache. `MarkAndUpdateWhereAsync` also uses its supplied context for the refresh.
 - Source entities need no tenant property. The tenant is never inferred from the ChangeTracker, so child entities such as `AppointmentItem` don't need one.
 
 ### 1. SaveChanges marks cache rows as stale
@@ -127,7 +128,7 @@ Both cache types use the same cycle:
 3. Upsert returned facts and clear `IsStale` only for selected rows; ignore unrequested live rows.
 4. Delete selected stale rows for which no live data was returned. For zero-valued rollups that should remain cached, return a zero-valued live row for each requested dimension.
 
-`UpdateAsync` returns the number of selected rows refreshed or deleted. `GetAsync` refreshes a stale row using `UpsertFactsAsync`; if no single live row is found, it leaves the row stale and logs a warning. Orphan deletion uses the mapped primary key, which must not contain shadow properties.
+`UpdateAsync` returns the number of selected rows refreshed or deleted. When using an existing transaction, the result and `RowCache.UpdatedRows` reflect the refresh before the caller commits; a later rollback does not revert `UpdatedRows`. `GetAsync` refreshes a stale row using `UpsertFactsAsync`; if no single live row is found, it leaves the row stale and logs a warning. Orphan deletion uses the mapped primary key, which must not contain shadow properties.
 
 Custom cache implementations must implement **both** `UpsertStaleAsync` and `UpsertFactsAsync` with atomic, tenant-scoped database upserts. The former marks rows stale without changing existing facts; the latter writes live facts and clears the stale flag. Each hook must honor the supplied context's transaction, handle an empty input, and avoid using EF's change tracker. They may share their SQL generation and execution. Provider implementations can override `LockStaleRowsAsync` for their database's locking semantics. The old `MergeAsync`, `UpdateFacts`, and `UpsertAsync` hooks have been removed.
 

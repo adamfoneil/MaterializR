@@ -231,6 +231,79 @@ public sealed class SetCacheTests
         Assert.IsFalse(row.IsStale);
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task UpdateAsync_UsesSuppliedContextAndRespectsTransaction(bool existingTransaction)
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var date = new DateOnly(2026, 1, 5);
+        db.Appointments.Add(new Appointment { TenantId = Tenant, Date = date, TransportId = 1, Points = 7, ClientId = 1, Status = AppointmentStatus.Scheduled });
+        await db.SaveChangesAsync();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<PointsSetCache>>();
+        var cache = new PointsSetCache(logger, new ThrowingContextFactory());
+        await MarkStaleAsync(cache, db, Tenant, date, 1);
+
+        await using var transaction = existingTransaction ? await db.Database.BeginTransactionAsync() : null;
+        await db.Appointments.Where(a => a.TenantId == Tenant).ExecuteUpdateAsync(setters => setters.SetProperty(a => a.Points, 12));
+        Assert.AreEqual(1, await cache.UpdateAsync(db, Tenant));
+        Assert.AreEqual(0, await cache.UpdateAsync(db, Tenant));
+        Assert.AreSame(transaction, db.Database.CurrentTransaction);
+        Assert.AreEqual(12, (await db.PointsCache.AsNoTracking().SingleAsync()).Scheduled);
+
+        if (transaction is not null)
+        {
+            await transaction.RollbackAsync();
+            var row = await db.PointsCache.AsNoTracking().SingleAsync();
+            Assert.IsTrue(row.IsStale);
+            Assert.AreEqual(0, row.Scheduled);
+        }
+        else
+        {
+            Assert.IsFalse((await db.PointsCache.AsNoTracking().SingleAsync()).IsStale);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task UpdateAsync_FailureRollsBackOnlyOwnedTransaction(bool existingTransaction)
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var date = new DateOnly(2026, 1, 5);
+        db.Appointments.Add(new Appointment { TenantId = Tenant, Date = date, TransportId = 1, Points = 7, ClientId = 1, Status = AppointmentStatus.Scheduled });
+        await db.SaveChangesAsync();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<PointsSetCache>>();
+        var cache = new FailingPointsSetCache(logger, new ThrowingContextFactory());
+        await MarkStaleAsync(cache, db, Tenant, date, 1);
+
+        await using var transaction = existingTransaction ? await db.Database.BeginTransactionAsync() : null;
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => cache.UpdateAsync(db, Tenant));
+        Assert.AreSame(transaction, db.Database.CurrentTransaction);
+        var row = await db.PointsCache.AsNoTracking().SingleAsync();
+        Assert.AreEqual(existingTransaction ? 7 : 0, row.Scheduled);
+        Assert.AreEqual(!existingTransaction, row.IsStale);
+        if (transaction is not null) await transaction.RollbackAsync();
+        Assert.IsTrue((await db.PointsCache.AsNoTracking().SingleAsync()).IsStale);
+    }
+
+    private sealed class ThrowingContextFactory : IDbContextFactory<ApplicationDbContext>
+    {
+        public ApplicationDbContext CreateDbContext() => throw new InvalidOperationException("Unexpected context creation");
+    }
+
+    private sealed class FailingPointsSetCache(ILogger<PointsSetCache> logger, IDbContextFactory<ApplicationDbContext> factory)
+        : PointsSetCache(logger, factory)
+    {
+        protected override async Task UpsertFactsAsync(ApplicationDbContext db, int tenantId, PointsCache[] rows, CancellationToken cancellationToken)
+        {
+            await base.UpsertFactsAsync(db, tenantId, rows, cancellationToken);
+            throw new InvalidOperationException("Refresh failed");
+        }
+    }
+
     private sealed class NoTrackingFactory(IDbContextFactory<ApplicationDbContext> inner) : IDbContextFactory<ApplicationDbContext>
     {
         public ApplicationDbContext CreateDbContext()

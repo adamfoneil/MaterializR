@@ -290,6 +290,104 @@ public sealed class RowCacheTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task UpdateAsync_UsesSuppliedContextAndRespectsTransaction(bool existingTransaction)
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var appointment = NewAppointment(Tenant, 10m);
+        db.Appointments.Add(appointment);
+        await db.SaveChangesAsync();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<AppointmentPriceRowCache>>();
+        var cache = new AppointmentPriceRowCache(logger, new ThrowingContextFactory());
+        await cache.MarkStaleKeysAsync(db, Tenant, [appointment.Id]);
+
+        await using var transaction = existingTransaction ? await db.Database.BeginTransactionAsync() : null;
+        await db.AppointmentItems.Where(item => item.AppointmentId == appointment.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.UnitPrice, 25m));
+        Assert.AreEqual(1, await cache.UpdateAsync(db, Tenant));
+        Assert.AreEqual(50m, cache.UpdatedRows[appointment.Id].TotalPrice);
+        Assert.AreEqual(0, await cache.UpdateAsync(db, Tenant));
+        Assert.AreSame(transaction, db.Database.CurrentTransaction);
+        Assert.AreEqual(50m, (await db.AppointmentPrices.AsNoTracking().SingleAsync()).TotalPrice);
+
+        if (transaction is not null)
+        {
+            await transaction.RollbackAsync();
+            var row = await db.AppointmentPrices.AsNoTracking().SingleAsync();
+            Assert.IsTrue(row.IsStale);
+            Assert.AreEqual(0m, row.TotalPrice);
+        }
+        else
+        {
+            Assert.IsFalse((await db.AppointmentPrices.AsNoTracking().SingleAsync()).IsStale);
+        }
+    }
+
+    [TestMethod]
+    public async Task MarkAndUpdateWhere_UsesSuppliedTransaction()
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var appointment = NewAppointment(Tenant, 10m);
+        db.Appointments.Add(appointment);
+        await db.SaveChangesAsync();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<AppointmentPriceRowCache>>();
+        var cache = new AppointmentPriceRowCache(logger, new ThrowingContextFactory());
+
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        Assert.AreEqual(1, await cache.MarkAndUpdateWhereAsync(db, Tenant,
+            db.Appointments.Where(a => a.TenantId == Tenant), a => a.Id));
+        Assert.AreSame(transaction, db.Database.CurrentTransaction);
+        var row = await db.AppointmentPrices.AsNoTracking().SingleAsync();
+        Assert.IsFalse(row.IsStale);
+        Assert.AreEqual(20m, row.TotalPrice);
+        await transaction.RollbackAsync();
+        Assert.AreEqual(0, await db.AppointmentPrices.CountAsync());
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task UpdateAsync_FailureRollsBackOnlyOwnedTransaction(bool existingTransaction)
+    {
+        using var scope = TestServiceProvider.Services.CreateScope();
+        await using var db = await InitDbAsync(scope);
+        var appointment = NewAppointment(Tenant, 10m);
+        db.Appointments.Add(appointment);
+        await db.SaveChangesAsync();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<AppointmentPriceRowCache>>();
+        var cache = new FailingAppointmentPriceRowCache(logger, new ThrowingContextFactory());
+        await cache.MarkStaleKeysAsync(db, Tenant, [appointment.Id]);
+
+        await using var transaction = existingTransaction ? await db.Database.BeginTransactionAsync() : null;
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => cache.UpdateAsync(db, Tenant));
+        Assert.AreSame(transaction, db.Database.CurrentTransaction);
+        var row = await db.AppointmentPrices.AsNoTracking().SingleAsync();
+        Assert.AreEqual(existingTransaction ? 20m : 0m, row.TotalPrice);
+        Assert.AreEqual(!existingTransaction, row.IsStale);
+        if (transaction is not null) await transaction.RollbackAsync();
+        Assert.IsTrue((await db.AppointmentPrices.AsNoTracking().SingleAsync()).IsStale);
+    }
+
+    private sealed class ThrowingContextFactory : IDbContextFactory<ApplicationDbContext>
+    {
+        public ApplicationDbContext CreateDbContext() => throw new InvalidOperationException("Unexpected context creation");
+    }
+
+    private sealed class FailingAppointmentPriceRowCache(
+        ILogger<AppointmentPriceRowCache> logger, IDbContextFactory<ApplicationDbContext> factory)
+        : AppointmentPriceRowCache(logger, factory)
+    {
+        protected override async Task UpsertFactsAsync(ApplicationDbContext db, int tenantId, AppointmentPriceCache[] rows, CancellationToken cancellationToken)
+        {
+            await base.UpsertFactsAsync(db, tenantId, rows, cancellationToken);
+            throw new InvalidOperationException("Refresh failed");
+        }
+    }
+
+    [TestMethod]
     public async Task UpsertFacts_ForeignKeyFailurePropagatesWithoutTrackingRows()
     {
         using var scope = TestServiceProvider.Services.CreateScope();
