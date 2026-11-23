@@ -168,8 +168,24 @@ public abstract class RowCache<TDbContext, TCacheEntity, TKey, TTenantKey>(
                 await UpsertFactsAsync(db, tenantId, liveData, cancellationToken);
 
                 var refreshed = liveData.Select(keySelector).ToHashSet();
+                
+                if (Logger.IsEnabled(LogLevel.Debug))
+                {
+                    Logger.LogDebug("Live Ids: {liveIds}, Stale Ids: {staleIds}, Refreshed Ids: {refreshedIds}",
+                        string.Join(", ", liveData.Select(keySelector)),
+                        string.Join(", ", staleRows.Select(keySelector)),
+                        string.Join(", ", refreshed));
+                }
+                
                 var orphans = staleRows.Where(row => !refreshed.Contains(keySelector(row))).ToArray();
                 var deleted = await Util.DeleteStaleRowsAsync(db, CacheDbSet(db), tenantId, orphans, cancellationToken);
+
+                if (Logger.IsEnabled(LogLevel.Debug))
+                {
+                    Logger.LogDebug("Deleted {deleted} orphaned cache rows for tenant {tenantId}, keys: {keys}",
+                        deleted, tenantId, string.Join(", ", orphans.Select(keySelector)));
+                }
+
                 if (txn is not null) await txn.CommitAsync(cancellationToken);
 
                 UpdatedRows = liveData.ToDictionary(keySelector, row => row);

@@ -49,6 +49,8 @@ internal static class Util
         var stopwatch = Stopwatch.StartNew();
         string status = "failed";
 
+        using var scope = logger.BeginScope("{MethodName}", methodName);
+
         try
         {
             await action();
@@ -71,6 +73,8 @@ internal static class Util
     {
         var stopwatch = Stopwatch.StartNew();
         string status = "failed";
+
+        using var scope = logger.BeginScope("{MethodName}", methodName);
 
         try
         {
